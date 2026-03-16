@@ -1,0 +1,80 @@
+# compose.yaml
+# Runs a CVMFS sidecar container and the DUNE DAQ container.
+#
+# Usage:
+#   podman-compose up -d        # start both containers in background
+#   podman-compose down         # stop and remove containers
+#   ./scripts/shell.sh          # open a shell in the DAQ container
+
+name: dunedaq
+
+volumes:
+  cvmfs-data:   # shared FUSE mount between sidecar and DAQ container
+
+services:
+
+  # ── CVMFS sidecar ───────────────────────────────────────────────────────────
+  cvmfs:
+    image: registry.cern.ch/cvmfs/service:latest
+    container_name: dunedaq-cvmfs
+    restart: unless-stopped
+
+    # CVMFS needs FUSE access and SYS_ADMIN to mount inside the container.
+    cap_add:
+      - SYS_ADMIN
+    devices:
+      - /dev/fuse
+    privileged: true
+
+    volumes:
+      # Bind mount from the Podman VM filesystem -- required for FUSE propagation.
+      - type: bind
+        source: /run/cvmfs
+        target: /cvmfs
+        bind:
+          propagation: rshared
+
+    environment:
+      CVMFS_CLIENT_PROFILE: single
+      CVMFS_REPOSITORIES: dunedaq.opensciencegrid.org,dunedaq-development.opensciencegrid.org
+      CVMFS_HTTP_PROXY: DIRECT
+      CVMFS_QUOTA_LIMIT: 10000
+      
+    healthcheck:
+      test: ["CMD", "test", "-d", "/cvmfs/dunedaq.opensciencegrid.org"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # ── DUNE DAQ container ──────────────────────────────────────────────────────
+  dunedaq:
+    image: ghcr.io/dune-daq/alma9-spack:latest
+    container_name: dunedaq-app
+    stdin_open: true
+    tty: true
+
+    depends_on:
+      cvmfs:
+        condition: service_healthy
+
+    user: "${HOST_UID}:${HOST_GID}"
+    working_dir: /work
+    environment:
+      HOME: /work
+      HISTFILE: /work/.bash_history
+
+    volumes:
+      # Bind mount from the Podman VM filesystem -- picks up FUSE mounts from sidecar.
+      - type: bind
+        source: /run/cvmfs
+        target: /cvmfs
+        read_only: true
+        bind:
+          propagation: rslave
+      # Persistent work directory -- code, history, and home files live here.
+      - ./work:/work:Z
+      # Custom passwd so the container knows who you are.
+      - ./work/container_passwd:/etc/passwd:ro,Z
+
+    entrypoint: ["/bin/bash", "-l"]
