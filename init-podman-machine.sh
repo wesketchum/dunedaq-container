@@ -12,6 +12,25 @@ CPUS=12
 MEMORY_MB=24576   # 24 GB
 DISK_GB=200
 
+# ── Virtualization backend (auto-detected) ────────────────────────────────────
+# Apple Silicon: use Apple Virtualization Framework + virtiofs + Rosetta.
+# Intel: use QEMU (no emulation needed, containers run natively).
+if [[ "$(uname -m)" == "arm64" ]]; then
+  VM_TYPE=vz
+  MOUNT_TYPE=virtiofs
+  if pkgutil --pkg-info com.apple.pkg.RosettaUpdateAuto &>/dev/null; then
+    ROSETTA_FLAG="--rosetta"
+  else
+    echo "WARNING: Rosetta not installed. x86_64 containers will use QEMU emulation (slow)."
+    echo "         Install Rosetta with: softwareupdate --install-rosetta"
+    ROSETTA_FLAG=""
+  fi
+else
+  VM_TYPE=qemu
+  MOUNT_TYPE=9p
+  ROSETTA_FLAG=""
+fi
+
 # ── Sanity checks ────────────────────────────────────────────────────────────
 if ! command -v podman &>/dev/null; then
   echo "ERROR: podman not found. Install with: brew install podman"
@@ -25,12 +44,15 @@ if podman machine inspect "$MACHINE_NAME" &>/dev/null; then
 fi
 
 # ── Create machine ───────────────────────────────────────────────────────────
-echo "Creating Podman machine '$MACHINE_NAME' (${CPUS} CPUs, ${MEMORY_MB} MB RAM, ${DISK_GB} GB disk)..."
+echo "Creating Podman machine '$MACHINE_NAME' (${CPUS} CPUs, ${MEMORY_MB} MB RAM, ${DISK_GB} GB disk, vm-type=${VM_TYPE})..."
 podman machine init "$MACHINE_NAME" \
   --cpus "$CPUS" \
   --memory "$MEMORY_MB" \
   --disk-size "$DISK_GB" \
   --rootful \
+  --vm-type "$VM_TYPE" \
+  --mount-type "$MOUNT_TYPE" \
+  $ROSETTA_FLAG \
   --now   # start immediately after init
 
 # ── Make this machine the default ───────────────────────────────────────────

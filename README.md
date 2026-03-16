@@ -97,7 +97,15 @@ podman-compose up -d
 
 ## Apple Silicon (M1/M2/M3/M4/M5)
 
-`ghcr.io/dune-daq/alma9-spack` is an x86_64-only image — there is no ARM64 build. On Apple Silicon Macs, Podman will run it under QEMU x86_64 emulation inside the VM. Everything works, but expect slower performance compared to a native Intel machine.
+`ghcr.io/dune-daq/alma9-spack` is an x86_64-only image — there is no ARM64 build. On Apple Silicon, `init-podman-machine.sh` automatically uses Apple's Virtualization Framework (`vz`) and Rosetta 2 for x86_64 emulation, which is significantly faster than QEMU software emulation.
+
+Rosetta must be installed before running the init script:
+
+```bash
+softwareupdate --install-rosetta
+```
+
+If Rosetta is not present, the script will warn and fall back to QEMU emulation (everything works, but builds will be slower).
 
 The full setup procedure is otherwise identical on Apple Silicon.
 
