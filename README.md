@@ -95,6 +95,12 @@ podman machine stop dunedaq && podman machine rm dunedaq
 podman-compose up -d
 ```
 
+## Apple Silicon (M1/M2/M3/M4/M5)
+
+`ghcr.io/dune-daq/alma9-spack` is an x86_64-only image — there is no ARM64 build. On Apple Silicon Macs, Podman will run it under QEMU x86_64 emulation inside the VM. Everything works, but expect slower performance compared to a native Intel machine.
+
+The full setup procedure is otherwise identical on Apple Silicon.
+
 ## CVMFS repositories
 
 The sidecar mounts the repositories listed in `CVMFS_REPOSITORIES` in `compose.yaml`. To add or remove repos, edit that environment variable and also update the `healthcheck` test and the `mkdir` lines in `init-podman-machine.sh`, then rebuild the machine.
