@@ -1,0 +1,83 @@
+# ~/.bash_profile  --  DUNE DAQ container (HOME=/work)
+#
+# Rosetta/QEMU + spack workaround for Apple Silicon.
+#
+# spack's setup-env.sh identifies the shell by reading /proc/self/exe. Under
+# Rosetta (and QEMU) that resolves to the emulator (/var/mnt/rosetta), not bash,
+# so spack cannot locate its own prefix and aborts with:
+#   "==> Error: SPACK_ROOT must point to spack's prefix when using rosetta"
+# spack DOES fall back to $SPACK_ROOT when it is already exported, so the helpers
+# below pre-set it. This affects every spack entry point: dbt-create, and
+# `source env.sh` / dbt-workarea-env inside a work area.
+#
+# NOTE: a login bash already sources /etc/profile before this file, so we do not
+# re-source it here.
+
+# spackroot [RELEASE]
+#   With a release name:  derive SPACK_ROOT from /cvmfs/.../<RELEASE>/spack-*
+#   With no argument:     derive it from ./dbt-workarea-constants.sh in $PWD
+spackroot() {
+  local rel="${1:-}" dir="" sp=""
+  if [ -z "$rel" ] && [ -f "$PWD/dbt-workarea-constants.sh" ]; then
+    rel=$(. "$PWD/dbt-workarea-constants.sh" >/dev/null 2>&1; printf %s "${SPACK_RELEASE:-}")
+    dir=$(. "$PWD/dbt-workarea-constants.sh" >/dev/null 2>&1; printf %s "${SPACK_RELEASES_DIR:-}")
+    [ -n "$rel" ] && [ -n "$dir" ] && sp=$(ls -d "$dir/$rel"/spack-*/ 2>/dev/null | head -1)
+  fi
+  [ -z "$sp" ] && [ -n "$rel" ] && sp=$(ls -d /cvmfs/dunedaq*/*/"$rel"/spack-*/ 2>/dev/null | head -1)
+  if [ -n "$sp" ]; then
+    export SPACK_ROOT="${sp%/}"
+    echo "SPACK_ROOT=$SPACK_ROOT"
+  else
+    echo "spackroot: could not find a spack-* dir for release '${rel:-?}'" >&2
+    return 1
+  fi
+}
+
+# Wrap dbt-create so SPACK_ROOT is set from its release argument automatically.
+dbt-create() {
+  local a
+  for a in "$@"; do
+    case "$a" in -*) continue ;; esac
+    if ls -d /cvmfs/dunedaq*/*/"$a"/spack-*/ >/dev/null 2>&1; then
+      spackroot "$a" >/dev/null
+      break
+    fi
+  done
+  command dbt-create "$@"
+}
+
+# Auto-set SPACK_ROOT when the working directory is a dbt work area, so that
+# `source env.sh` (which calls the dbt-workarea-env *function*, not wrappable)
+# just works. Re-derives only when $PWD changes, so it is cheap per-prompt.
+_dbt_last_pwd=""
+_dbt_autospackroot() {
+  # Export spack's real shell functions so they reach dbt-build's lint subshell
+  # (see note above). Cheap and idempotent; only fires once they exist.
+  declare -F _spack_shell_wrapper >/dev/null 2>&1 && export -f spack _spack_shell_wrapper 2>/dev/null
+  [ "$PWD" = "$_dbt_last_pwd" ] && return
+  _dbt_last_pwd="$PWD"
+  [ -f "$PWD/dbt-workarea-constants.sh" ] || return
+  local rel dir sp
+  rel=$(. "$PWD/dbt-workarea-constants.sh" >/dev/null 2>&1; printf %s "${SPACK_RELEASE:-}")
+  dir=$(. "$PWD/dbt-workarea-constants.sh" >/dev/null 2>&1; printf %s "${SPACK_RELEASES_DIR:-}")
+  [ -n "$rel" ] && [ -n "$dir" ] || return
+  sp=$(ls -d "$dir/$rel"/spack-*/ 2>/dev/null | head -1)
+  [ -n "$sp" ] && export SPACK_ROOT="${sp%/}"
+}
+case ";${PROMPT_COMMAND:-};" in
+  *";_dbt_autospackroot;"*) ;;
+  *) PROMPT_COMMAND="_dbt_autospackroot${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;;
+esac
+
+function git_clone_dunedaq(){
+    local repo_name=$1
+    shift
+    git clone "$@" git@github.com:DUNE-DAQ/"$repo_name".git
+}
+
+# Rosetta workaround (cont.): spack's setup-env.sh defines its shell functions
+# `spack` (which delegates to `_spack_shell_wrapper`) but only EXPORTS them when
+# it detects bash -- skipped under Rosetta. dbt-build's --lint step spawns a bash
+# sub-script that calls `spack load`, so both functions must be exported to reach
+# it; otherwise the child finds `spack` but not `_spack_shell_wrapper` and fails.
+# The export happens in the prompt hook below, once setup-env.sh has been sourced.

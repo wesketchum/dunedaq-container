@@ -34,7 +34,16 @@ This creates a **rootful** Podman VM and installs a systemd service that configu
 This creates:
 - `.env` — your host UID/GID, read by `podman-compose` so the container runs as you
 - `work/container_passwd` — a minimal passwd file so the container knows your username
+- `work/.bash_profile` — copied from `templates/bash_profile` (only if it doesn't already
+  exist — re-running `setup.sh` never overwrites your copy). Sets up the Rosetta/spack
+  workaround (see [Apple Silicon](#apple-silicon-m1m2m3m4m5)) and a `git_clone_dunedaq` helper.
 - `work/` — your persistent work directory (code, history, dotfiles)
+
+Not created by this script, but needed for a fully working environment — set these up
+yourself in `work/` if you need them:
+- `work/.gitconfig` — git identity (`user.name`/`user.email`) for commits made inside the container
+- `work/.ssh` — an SSH keypair with GitHub access, if you'll be cloning/pushing over SSH
+  (e.g. via the `git_clone_dunedaq` helper)
 
 ### 3. Start the stack
 
@@ -73,6 +82,7 @@ Then `./shell.sh` as usual. The containers have `restart: unless-stopped`, so if
 | Start stack | `podman-compose up -d` |
 | Open DAQ shell | `./shell.sh` |
 | Stop stack | `podman-compose down` |
+| Recreate stack (fresh CVMFS cache) | `./restart.sh` |
 | View logs | `podman-compose logs -f` |
 | Check CVMFS health | `podman ps --format "{{.Names}}\t{{.Status}}"` |
 
@@ -119,6 +129,12 @@ The sidecar mounts the repositories listed in `CVMFS_REPOSITORIES` in `compose.y
 - Check logs: `podman logs dunedaq-cvmfs --tail 30`
 - Likely cause: the repo mount point directories don't exist on the VM. Verify the systemd service ran: `podman machine ssh dunedaq -- systemctl status cvmfs-mountpoint.service`
 - If the service is missing the `mkdir` lines, SSH into the VM and update `/etc/systemd/system/cvmfs-mountpoint.service` to include an `ExecStart=/bin/mkdir -p /run/cvmfs/<repo>` line for each repository, then `sudo systemctl daemon-reload`.
+
+**CVMFS reads fail with "Input/output error" during a build**
+- Usually a stuck or corrupted cached chunk. Run `./restart.sh` — it recreates the stack
+  (wiping the sidecar's writable layer / CVMFS cache), and unlike a plain `podman restart`
+  or `podman-compose down && up`, it also waits for a real CVMFS read to succeed before
+  returning (the compose healthcheck's `test -d` alone is a false positive).
 
 **CVMFS sidecar requires rootful Podman**
 - Check: `podman machine ssh dunedaq -- podman info 2>/dev/null | grep -i rootless`
