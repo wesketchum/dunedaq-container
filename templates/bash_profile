@@ -45,6 +45,13 @@ dbt-create() {
   done
   command dbt-create "$@"
 }
+# Export so the wrapper (not the raw cvmfs dbt-create) is what child bash
+# processes see -- e.g. dbtx-create-workarea-from-recipe.py runs
+# `bash -c 'dbt-create ...'` via subprocess.run(), which is a non-login,
+# non-interactive shell that never sources this file. Without this export,
+# that subprocess falls through to the un-wrapped dbt-create and hits the
+# Rosetta SPACK_ROOT bug even though the interactive shell "has the fix".
+export -f spackroot dbt-create
 
 # Auto-set SPACK_ROOT when the working directory is a dbt work area, so that
 # `source env.sh` (which calls the dbt-workarea-env *function*, not wrappable)
