@@ -57,10 +57,16 @@ export -f spackroot dbt-create
 # `source env.sh` (which calls the dbt-workarea-env *function*, not wrappable)
 # just works. Re-derives only when $PWD changes, so it is cheap per-prompt.
 _dbt_last_pwd=""
-_dbt_autospackroot() {
-  # Export spack's real shell functions so they reach dbt-build's lint subshell
-  # (see note above). Cheap and idempotent; only fires once they exist.
+# Export spack's real shell functions so they reach child bash scripts that call
+# `spack load` (dbt-build --lint, dbt-clang-format.sh; see note at the end).
+# Cheap and idempotent; only fires once they exist. Called from the prompt hook
+# below, and explicitly by bin/daq-exec (non-interactive shells have no prompt).
+_dbt_export_spack_fns() {
   declare -F _spack_shell_wrapper >/dev/null 2>&1 && export -f spack _spack_shell_wrapper 2>/dev/null
+  return 0
+}
+_dbt_autospackroot() {
+  _dbt_export_spack_fns
   [ "$PWD" = "$_dbt_last_pwd" ] && return
   _dbt_last_pwd="$PWD"
   [ -f "$PWD/dbt-workarea-constants.sh" ] || return
