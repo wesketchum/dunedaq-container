@@ -86,6 +86,37 @@ Then `./shell.sh` as usual. The containers have `restart: unless-stopped`, so if
 | View logs | `podman-compose logs -f` |
 | Check CVMFS health | `podman ps --format "{{.Names}}\t{{.Status}}"` |
 
+## Agent-driven workflow (Claude Code)
+
+One long-lived Claude Code session acts as the **dunedaq-env broker**. It owns the
+container, and other Claude sessions send it requests: create a work area, clone
+repos, build, run unit tests / lint / integration tests.
+
+```bash
+cd ~/dunedaq-container && claude      # then: /dunedaq-env
+```
+
+From any other session (e.g. one working in `~/dunedaq/all_repos`), use the
+`/dunedaq-env-client` skill, or just ask it to "have dunedaq-env build and unit-test X".
+Peers edit code directly in `work/<area>/sourcecode/` on the host; the broker runs
+everything in the container. It never pushes. Pushes are blocked inside the
+container, and publishing is left to you.
+
+| Piece | Purpose |
+|---|---|
+| `bin/daq-exec` | Run a command in the container with the DAQ env set up correctly (handles the Rosetta `SPACK_ROOT` trap) |
+| `bin/daq-job` | Queue/run long jobs: one per work area, ≤2 total, integtests exclusive; state + logs in `work/.daq-jobs/` |
+| `bin/daq-stack` | `status` / `ensure` / `restart-if-idle` (refuses if jobs or interactive shells are active) |
+| `.claude/skills/dunedaq-env/` | Broker instructions + `PROTOCOL.md` (message format) |
+| `.claude/skills/dunedaq-env-client/` | How peer sessions make requests |
+| `.claude/agents/daq-log-triage.md` | Read-only subagent that diagnoses failed build/test logs |
+
+To make the client skill available in sessions outside this directory:
+
+```bash
+ln -s ~/dunedaq-container/.claude/skills/dunedaq-env-client ~/.claude/skills/dunedaq-env-client
+```
+
 ## Customizing the Podman machine
 
 Edit the variables at the top of `init-podman-machine.sh`:

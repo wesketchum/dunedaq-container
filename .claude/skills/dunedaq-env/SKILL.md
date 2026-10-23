@@ -98,6 +98,11 @@ dbt-build --unittest <pkg|omit for all>
 dbt-build --lint <pkg|sourcecode/<repo>/<file>>    # file paths are relative to the area root
 echo yes | timeout 300 dbt-clang-format.sh <repo>/<path>   # format step only; run from sourcecode/
 ```
+- **unittest:** `dbt-build --unittest` exits 0 (and `daq-job` says `done`) even when tests
+  fail. Always check the log: every `Leaving test module` must be followed by
+  `*** No errors detected`. Boost writes failures as `*** N failure(s) is/are detected in
+  the test module "X"`, so match `failures? (is|are) detected`. A module that crashes may
+  print neither line, so also compare the module count with the "No errors" count.
 - **lint:** peers give file paths relative to `sourcecode/` (e.g. `hdf5libs/src/X.cpp`), but
   `dbt-build --lint` resolves them against the area root. Prefix `sourcecode/` or it fails
   with `Unable to find file ... to lint`. The first lint in an area clones `styleguide/` into

@@ -1,0 +1,207 @@
+#!/usr/bin/env bash
+# bin/daq-job
+# Queue + run long container jobs (dbt-create, clone, build, test) with limits:
+#   - at most one job per work area at a time
+#   - at most MAX_SLOTS (2) jobs across all areas
+#   - --exclusive jobs (integration tests) take every slot
+# Jobs wait (polling) until their locks are free, so callers just start one and
+# wait for it to exit -- e.g. with Claude Code's run_in_background.
+#
+# Usage:
+#   bin/daq-job run [--area A | --new-area A] [--label L] [--requester R] [--exclusive] -- <cmd>
+#       --area A       run inside work area A (env.sh sourced), lock A
+#       --new-area A   run at /work with dbt set up (for dbt-create ... A), lock A
+#   bin/daq-job list [N]        most recent N jobs (default 15)
+#   bin/daq-job status ID       metadata + state of one job
+#   bin/daq-job log ID [N]      last N lines of a job's log (default 60)
+#   bin/daq-job cancel ID       stop a queued or running job
+#   bin/daq-job active          print number of queued+running jobs; exit 0 if any, 1 if none
+#
+# State lives in work/.daq-jobs/<ID>/ (visible in the container as /work/.daq-jobs).
+
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(dirname "$HERE")"
+JOBS="$ROOT/work/.daq-jobs"
+LOCKS="$JOBS/locks"
+MAX_SLOTS=2
+POLL=5
+
+mkdir -p "$LOCKS"
+
+die() { echo "daq-job: $*" >&2; exit 2; }
+now() { date '+%Y-%m-%dT%H:%M:%S'; }
+getf() { [ -f "$JOBS/$1/$2" ] && cat "$JOBS/$1/$2" || true; }
+# Job dirs only (skips locks/ and the broker name file), oldest first.
+job_ids() { local d; for d in "$JOBS"/*/; do [ -f "$d/state" ] && basename "$d"; done | sort; }
+
+# ── locking (mkdir is atomic; owner pid lets us reap locks of dead runners) ──
+try_lock() {  # try_lock NAME ID -> 0 if acquired
+  local d="$LOCKS/$1"
+  if mkdir "$d" 2>/dev/null; then
+    echo "$2 $$" > "$d/owner"; return 0
+  fi
+  local pid; pid=$(awk '{print $2}' "$d/owner" 2>/dev/null || true)
+  if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+    rm -rf "$d"
+    mkdir "$d" 2>/dev/null && { echo "$2 $$" > "$d/owner"; return 0; }
+  fi
+  return 1
+}
+unlock() { local d="$LOCKS/$1"; [ "$(awk '{print $2}' "$d/owner" 2>/dev/null)" = "$$" ] && rm -rf "$d"; return 0; }
+
+HELD=""
+release_all() { local l; for l in $HELD; do unlock "$l"; done; HELD=""; }
+
+acquire() {  # acquire ID AREA EXCLUSIVE -> 0 when all needed locks are held
+  local id=$1 area=$2 excl=$3 i got=0
+  if [ -n "$area" ]; then try_lock "area-$area" "$id" && HELD="area-$area" || return 1; fi
+  for i in $(seq 1 $MAX_SLOTS); do
+    if try_lock "slot-$i" "$id"; then
+      HELD="$HELD slot-$i"; got=$((got+1))
+      [ "$excl" = 1 ] || return 0
+    elif [ "$excl" = 1 ]; then
+      release_all; return 1
+    fi
+  done
+  [ $got -gt 0 ] && return 0
+  release_all; return 1
+}
+
+queue_position() {  # number of queued jobs created before this one
+  local id=$1 n=0 j
+  for j in $(job_ids); do
+    [ "$j" = "$id" ] && break
+    [ "$(getf "$j" state)" = queued ] && n=$((n+1))
+  done
+  echo $n
+}
+
+# A queued/running job whose runner pid is gone is stale (e.g. host reboot).
+alive() { local pid; pid=$(getf "$1" runner_pid); [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; }
+effective_state() {
+  local s; s=$(getf "$1" state)
+  case "$s" in queued|running) alive "$1" || s="lost" ;; esac
+  echo "$s"
+}
+
+# ── commands ─────────────────────────────────────────────────────────────────
+cmd_run() {
+  local area="" new_area="" label="job" requester="${DAQ_REQUESTER:-}" excl=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --area)      area="$2"; shift 2 ;;
+      --new-area)  new_area="$2"; shift 2 ;;
+      --label)     label="$2"; shift 2 ;;
+      --requester) requester="$2"; shift 2 ;;
+      --exclusive) excl=1; shift ;;
+      --)          shift; break ;;
+      *)           die "unknown option $1" ;;
+    esac
+  done
+  [ $# -gt 0 ] || die "no command given"
+  [ -z "$area" ] || [ -z "$new_area" ] || die "use --area or --new-area, not both"
+  local lock_area="${area:-$new_area}"
+  if [ -n "$new_area" ] && [ -e "$ROOT/work/$new_area" ]; then
+    die "work/$new_area already exists"
+  fi
+
+  local id; id="$(date '+%Y%m%d-%H%M%S')-$(printf '%s' "$label" | tr -c 'A-Za-z0-9_' '-' | cut -c1-24)-$$"
+  local dir="$JOBS/$id"; mkdir -p "$dir"
+  printf '%s\n' "$*"      > "$dir/cmd"
+  echo "${lock_area:--}"  > "$dir/area"
+  echo "$label"           > "$dir/label"
+  echo "${requester:--}"  > "$dir/requester"
+  echo "$excl"            > "$dir/exclusive"
+  now                     > "$dir/created"
+  echo $$                 > "$dir/runner_pid"
+  echo queued             > "$dir/state"
+  : > "$dir/log"
+
+  trap 'release_all' EXIT
+  trap 'echo cancelled > "$dir/state"; release_all; exit 130' TERM INT
+
+  echo "JOB $id"
+  echo "LOG $dir/log"
+  local waited=0
+  until acquire "$id" "$lock_area" "$excl"; do
+    if [ $waited -eq 0 ]; then
+      echo "queued: waiting for $( [ -n "$lock_area" ] && echo "area '$lock_area' and " )a build slot (position $(queue_position "$id"))"
+    fi
+    waited=1; sleep $POLL
+  done
+
+  echo running > "$dir/state"; now > "$dir/started"
+  local rc=0
+  DAQ_JOB_PIDFILE="/work/.daq-jobs/$id/container_pgid" \
+    "$HERE/daq-exec" ${area:+--area "$area"} -- "$*" >> "$dir/log" 2>&1 || rc=$?
+  now > "$dir/finished"; echo $rc > "$dir/exit_code"
+  if [ "$(getf "$id" state)" != cancelled ]; then
+    [ $rc -eq 0 ] && echo done > "$dir/state" || echo failed > "$dir/state"
+  fi
+
+  echo "STATE $(getf "$id" state) (exit $rc)"
+  echo "----- last 40 lines of $dir/log -----"
+  tail -n 40 "$dir/log" | sed $'s/\x1b\\[[0-9;]*[A-Za-z]//g'
+  return $rc
+}
+
+cmd_list() {
+  local n=${1:-15} j
+  printf '%-44s %-10s %-28s %-22s %s\n' ID STATE AREA REQUESTER LABEL
+  for j in $(job_ids | tail -n "$n"); do
+    printf '%-44s %-10s %-28s %-22s %s\n' "$j" "$(effective_state "$j")" \
+      "$(getf "$j" area)" "$(getf "$j" requester)" "$(getf "$j" label)"
+  done
+}
+
+cmd_status() {
+  local id=${1:?job id}; [ -d "$JOBS/$id" ] || die "no job $id"
+  local f
+  echo "id:         $id"
+  echo "state:      $(effective_state "$id")"
+  for f in area label requester exclusive created started finished exit_code; do
+    printf '%-11s %s\n' "$f:" "$(getf "$id" $f)"
+  done
+  echo "cmd:        $(getf "$id" cmd)"
+  echo "log:        $JOBS/$id/log"
+  [ "$(getf "$id" state)" = queued ] && echo "queue pos:  $(queue_position "$id")"
+  return 0
+}
+
+cmd_log() {
+  local id=${1:?job id} n=${2:-60}; [ -d "$JOBS/$id" ] || die "no job $id"
+  tail -n "$n" "$JOBS/$id/log" | sed $'s/\x1b\\[[0-9;]*[A-Za-z]//g'
+}
+
+cmd_cancel() {
+  local id=${1:?job id}; [ -d "$JOBS/$id" ] || die "no job $id"
+  local pgid; pgid=$(getf "$id" container_pgid)
+  echo cancelled > "$JOBS/$id/state"
+  if [ -n "$pgid" ]; then
+    podman exec dunedaq-app kill -TERM -- "-$pgid" 2>/dev/null || true
+  fi
+  local rp; rp=$(getf "$id" runner_pid)
+  [ -n "$rp" ] && kill -TERM "$rp" 2>/dev/null || true
+  echo "cancelled $id"
+}
+
+cmd_active() {
+  local n=0 j
+  for j in $(job_ids); do
+    case "$(effective_state "$j")" in queued|running) n=$((n+1)) ;; esac
+  done
+  echo $n; [ $n -gt 0 ]
+}
+
+sub=${1:-}; shift || true
+case "$sub" in
+  run)    cmd_run "$@" ;;
+  list)   cmd_list "$@" ;;
+  status) cmd_status "$@" ;;
+  log)    cmd_log "$@" ;;
+  cancel) cmd_cancel "$@" ;;
+  active) cmd_active ;;
+  *)      sed -n '2,20p' "$0"; exit 2 ;;
+esac
