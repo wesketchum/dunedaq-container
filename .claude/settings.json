@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bin/daq-job *)",
+      "Bash(bin/daq-exec *)",
+      "Bash(bin/daq-stack status)",
+      "Bash(bin/daq-stack ensure)",
+      "Bash(podman ps *)",
+      "Bash(git -C /Users/wketchum/dunedaq/all_repos/* log *)",
+      "Bash(git -C /Users/wketchum/dunedaq/all_repos/* show *)",
+      "Bash(git -C /Users/wketchum/dunedaq/all_repos/* ls-remote *)",
+      "Bash(python3 /Users/wketchum/dunedaq/all_repos/.claude/skills/tag-packages/resolve_build_packages.py *)",
+      "Read(/Users/wketchum/dunedaq/all_repos/**)",
+      "Write(/Users/wketchum/dunedaq-container/work/.daq-jobs/broker)"
+    ],
+    "ask": [
+      "Bash(bin/daq-stack restart-if-idle)",
+      "Bash(git push *)",
+      "Bash(gh *)",
+      "Bash(*restart.sh*)",
+      "Bash(podman-compose down*)",
+      "Bash(rm -rf *)"
+    ]
+  }
+}

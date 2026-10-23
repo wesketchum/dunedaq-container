@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# bin/daq-exec
+# Run a command inside the DUNE DAQ container, non-interactively, with the
+# DUNE DAQ environment correctly set up. This is the single entry point agents
+# use to touch the container.
+#
+# Usage:
+#   bin/daq-exec [--area NAME] [--quiet-env] -- <command string>
+#
+#   --area NAME   cd into /work/NAME, set SPACK_ROOT (spackroot), source env.sh
+#   (no --area)   cd /work, source setup_dunedaq.sh + setup_dbt latest
+#                 (what you need for dbt-create / dbtx-create-workarea-from-recipe.py)
+#   --quiet-env   send env-setup chatter to /dev/null instead of stderr
+#
+# Why this exists: the PROMPT_COMMAND hook in work/.bash_profile that sets
+# SPACK_ROOT (the Rosetta/spack workaround) never fires in a non-interactive
+# `podman exec`, so `source env.sh` must be preceded by an explicit `spackroot`.
+#
+# Guardrail: pushes from inside the container are disabled (pushInsteadOf maps
+# GitHub URLs to an invalid scheme). Publishing goes through the host-side
+# dune-github-publisher agent, with your approval.
+
+set -euo pipefail
+
+CONTAINER="dunedaq-app"
+AREA=""
+ENV_OUT="/dev/stderr"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --area)      AREA="$2"; shift 2 ;;
+    --quiet-env) ENV_OUT="/dev/null"; shift ;;
+    --)          shift; break ;;
+    -h|--help)   sed -n '2,22p' "$0"; exit 0 ;;
+    *)           break ;;
+  esac
+done
+
+[ $# -gt 0 ] || { echo "daq-exec: no command given (see --help)" >&2; exit 2; }
+CMD="$*"
+
+if [ -n "$AREA" ]; then
+  case "$AREA" in */*|.*|"") echo "daq-exec: bad area name '$AREA'" >&2; exit 2 ;; esac
+  [ -f "$(dirname "$0")/../work/$AREA/env.sh" ] \
+    || { echo "daq-exec: work/$AREA is not a work area (no env.sh)" >&2; exit 2; }
+fi
+
+if ! podman ps --format '{{.Names}}' 2>/dev/null | grep -q "^${CONTAINER}$"; then
+  echo "daq-exec: container '$CONTAINER' is not running -- run bin/daq-stack ensure" >&2
+  exit 3
+fi
+
+if [ -n "$AREA" ]; then
+  SETUP="cd /work/$AREA && spackroot && source ./env.sh && _dbt_export_spack_fns"
+else
+  SETUP="cd /work && source /cvmfs/dunedaq.opensciencegrid.org/setup_dunedaq.sh && setup_dbt latest"
+fi
+
+# Env-setup output (very noisy) goes to ENV_OUT; the command's own output is untouched.
+# The command runs in its own process group (setsid) so bin/daq-job can kill the
+# whole tree; if DAQ_JOB_PIDFILE (a /work/... path) is set, the group id is written
+# there. The image has no ps/pgrep, so this is the only reliable handle on it.
+exec podman exec -i \
+  -e GIT_CONFIG_COUNT=2 \
+  -e GIT_CONFIG_KEY_0=url.no-push-from-container:///.pushInsteadOf \
+  -e GIT_CONFIG_VALUE_0=git@github.com: \
+  -e GIT_CONFIG_KEY_1=url.no-push-from-container:///.pushInsteadOf \
+  -e GIT_CONFIG_VALUE_1=https://github.com/ \
+  -e DAQ_JOB_PIDFILE="${DAQ_JOB_PIDFILE:-}" \
+  "$CONTAINER" setsid --wait bash -lc "
+    [ -n \"\$DAQ_JOB_PIDFILE\" ] && echo \$\$ > \"\$DAQ_JOB_PIDFILE\"
+    { $SETUP ; } >$ENV_OUT 2>&1 || { echo 'daq-exec: environment setup failed' >&2; exit 4; }
+    $CMD
+  "
