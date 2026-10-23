@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# bin/daq-stack
+# Health and lifecycle of the Podman machine + CVMFS sidecar + DAQ container.
+#
+# Usage:
+#   bin/daq-stack status            machine / containers / real CVMFS read check
+#   bin/daq-stack ensure            start whatever is down (never recreates a running stack)
+#   bin/daq-stack restart-if-idle   ./restart.sh (fresh CVMFS cache), refused if jobs are active
+#
+# Exit codes: 0 healthy/done, 1 unhealthy, 5 refused because jobs are active.
+
+set -uo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(dirname "$HERE")"
+MACHINE="dunedaq"
+COMPOSE="$ROOT/compose.yaml"
+
+machine_running() { podman machine inspect "$MACHINE" --format '{{.State}}' 2>/dev/null | grep -qi running; }
+running() { podman ps --format '{{.Names}}' 2>/dev/null | grep -q "^$1$"; }
+cvmfs_ok() {
+  # A real read, not `test -d` (the compose healthcheck is a false positive).
+  podman exec dunedaq-app sh -c 'ls /cvmfs/dunedaq.opensciencegrid.org/setup_dunedaq.sh && ls /cvmfs/dunedaq-development.opensciencegrid.org/nightly' >/dev/null 2>&1
+}
+rootful_default() {
+  podman system connection list --format '{{.Name}} {{.Default}}' 2>/dev/null | grep -q "^${MACHINE}-root true$"
+}
+
+status() {
+  local ok=0
+  if machine_running; then echo "machine:   running"; else echo "machine:   DOWN"; ok=1; fi
+  rootful_default && echo "conn:      ${MACHINE}-root (default)" || { echo "conn:      default is NOT ${MACHINE}-root"; ok=1; }
+  for c in dunedaq-cvmfs dunedaq-app; do
+    if running "$c"; then echo "$c: $(podman ps --filter name=^$c$ --format '{{.Status}}')"; else echo "$c: DOWN"; ok=1; fi
+  done
+  if running dunedaq-app && cvmfs_ok; then echo "cvmfs:     readable"; else echo "cvmfs:     NOT readable"; ok=1; fi
+  echo "jobs:      $("$HERE/daq-job" active) active"
+  return $ok
+}
+
+ensure() {
+  if ! machine_running; then
+    echo "Starting podman machine $MACHINE..."
+    podman machine start "$MACHINE" || return 1
+  fi
+  rootful_default || podman system connection default "${MACHINE}-root"
+  if ! running dunedaq-cvmfs || ! running dunedaq-app; then
+    echo "Bringing the stack up..."
+    podman-compose -f "$COMPOSE" up -d || return 1
+  fi
+  for i in $(seq 1 30); do cvmfs_ok && { status; return 0; }; sleep 2; done
+  echo "CVMFS not readable after 60s. Check: podman logs dunedaq-cvmfs --tail 30"
+  echo "If no jobs are running, try: bin/daq-stack restart-if-idle"
+  return 1
+}
+
+# Interactive shells (./shell.sh) hold a pts on stdin. pid 1, the container's own
+# entrypoint, always holds /dev/pts/0 and is not counted.
+interactive_shells() {
+  podman exec dunedaq-app bash -c 'n=0; for p in /proc/[0-9]*; do
+      [ "${p#/proc/}" = 1 ] && continue
+      case "$(readlink $p/fd/0 2>/dev/null)" in /dev/pts/*) n=$((n+1)) ;; esac
+    done; echo $n' 2>/dev/null || echo 0
+}
+
+restart_if_idle() {
+  local n s; n=$("$HERE/daq-job" active) || true
+  if [ "${n:-0}" -gt 0 ]; then
+    echo "Refusing to restart: $n job(s) active (restart would kill them)."
+    "$HERE/daq-job" list
+    return 5
+  fi
+  s=$(interactive_shells)
+  if [ "${s:-0}" -gt 0 ]; then
+    echo "Refusing to restart: $s process(es) attached to an interactive shell in dunedaq-app"
+    echo "(someone is in ./shell.sh). Ask the user before restarting."
+    return 5
+  fi
+  "$ROOT/restart.sh"
+}
+
+case "${1:-status}" in
+  status)          status ;;
+  ensure)          ensure ;;
+  restart-if-idle) restart_if_idle ;;
+  *)               sed -n '2,10p' "$0"; exit 2 ;;
+esac
