@@ -1,0 +1,31 @@
+#!/bin/bash
+# daq-watch [interval_s]: print one line per job that reaches a terminal state
+# (done|failed|cancelled|lost) while this runs. Silent otherwise, so it costs the
+# broker nothing until a job ends. Jobs already finished at start are the baseline.
+# Reads only work/.daq-jobs/*/state on the host; no podman, no model tokens.
+# Meant to run under the Monitor tool; see .claude/skills/dunedaq-env/SKILL.md.
+interval=${1:-30}
+dir=${DAQ_JOBS_DIR:-$(cd "$(dirname "$0")/.." && pwd)/work/.daq-jobs}
+seen=" "
+
+scan() {
+  local d id st
+  for d in "$dir"/*/; do
+    [ -f "$d/state" ] || continue
+    id=$(basename "$d")
+    case "$seen" in *" $id "*) continue ;; esac
+    st=$(cat "$d/state" 2>/dev/null)
+    case "$st" in
+      done|failed|cancelled|lost)
+        seen="$seen$id "
+        [ "$1" = quiet ] || echo "JOB-ENDED $st $id requester=$(cat "$d/requester" 2>/dev/null)"
+        ;;
+    esac
+  done
+}
+
+scan quiet
+while true; do
+  sleep "$interval"
+  scan
+done
