@@ -49,7 +49,9 @@ They are not the failure unless the job died there (`daq-exec: environment setup
 | `other` | none of the above; say what you saw |
 
 Known noise; ignore it: `unable to load the correct gcc-runtime` / `matches multiple packages`,
-`image platform (linux/amd64) does not match`.
+`image platform (linux/amd64) does not match`, and in integtest logs `ps: command not found`,
+`Unable to find the 'jq' utility` (missing optional tools; results are unaffected),
+`'UsePAM no' is not supported in RHEL`.
 
 ## Suggest
 
@@ -61,6 +63,8 @@ One or two concrete next steps, using DUNE DAQ specifics:
 - Errors in a package the requester did **not** change → likely an API change in a package
   they did change; name both.
 - `cvmfs-io` → `bin/daq-stack restart-if-idle`, then retry.
+- integtest `ssh: connect to host ... Connection refused` → the loopback sshd is down (class
+  `env-setup`); `bin/daq-stack ensure`, then retry. If it persists, see `work/.ssh/sshd/sshd.log`.
 - Stale CMake cache symptoms (paths to deleted dirs, mismatched compiler) → `build` with `clean: true`.
 
 ## Output (only this, no preamble)

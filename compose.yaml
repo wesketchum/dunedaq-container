@@ -51,6 +51,9 @@ services:
   dunedaq:
     image: ghcr.io/dune-daq/alma9-spack:latest
     container_name: dunedaq-app
+    # Stable hostname: drunc's SSH process manager ssh-es to it, and
+    # work/.ssh/config routes it to the loopback sshd (see setup.sh).
+    hostname: dunedaq-app
     stdin_open: true
     tty: true
 
@@ -77,4 +80,16 @@ services:
       # Custom passwd so the container knows who you are.
       - ./work/container_passwd:/etc/passwd:ro,Z
 
-    entrypoint: ["/bin/bash", "-l"]
+    # Start the non-root loopback sshd (config from setup.sh), then the usual login
+    # shell as pid 1. A missing config only skips sshd; the shell still starts.
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        if [ -f /work/.ssh/sshd/sshd_config ]; then
+          /usr/sbin/sshd -f /work/.ssh/sshd/sshd_config -E /work/.ssh/sshd/sshd.log \
+            || echo "WARNING: loopback sshd failed to start, see /work/.ssh/sshd/sshd.log"
+        else
+          echo "WARNING: no /work/.ssh/sshd/sshd_config (run ./setup.sh); integtests need sshd"
+        fi
+        exec /bin/bash -l

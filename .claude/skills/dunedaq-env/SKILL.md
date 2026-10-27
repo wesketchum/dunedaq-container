@@ -19,7 +19,15 @@ cat whole logs, and hand failed logs to the `daq-log-triage` subagent.
    Write it to `work/.daq-jobs/broker` (just the name, one line) so peers can address you.
 2. `bin/daq-stack ensure`: start the machine/stack if it's down.
 3. `bin/daq-job list`: report any `lost` jobs (runner died, e.g. after a reboot) to the user.
-4. Tell the user, in one line: your session name, the stack status, and "ready for requests".
+4. Arm the watchdog: `Monitor` with command `bin/daq-watch 30`, `timeout_ms: 1800000`,
+   description "daq job endings". It polls `work/.daq-jobs/*/state` on the host every 30 s
+   (no podman, no model tokens) and prints `JOB-ENDED <state> <id> requester=<peer>` only
+   when a job reaches a terminal state. Monitors expire after 30 min: re-arm on each expiry
+   notice and after a resume. On each `JOB-ENDED` line, check that the request it belongs to
+   has had its next step started or its `DAQ-RESULT` sent; if not, do that now. This catches
+   jobs started without `run_in_background` (no completion notice) and results that were
+   forgotten.
+5. Tell the user, in one line: your session name, the stack status, and "ready for requests".
 
 **Keep the address current.** A resumed or restarted session can come back under a new
 name, and the steps above do not re-run on resume. Before each `DAQ-ACK`, and on your first
@@ -125,12 +133,32 @@ dbt-build also writes its own logs to `<area>/log/build_attempt_*.log` and
 **integtest** (always `--exclusive`; can take a long time):
 ```bash
 daqsystemtest_integtest_bundle.sh --list-only -r local          # what exists here
-daqsystemtest_integtest_bundle.sh -r '<repo|repo2>' -k '<pattern>' --concise-output --tmpdir /work/<area>/integtest_tmp
+daqsystemtest_integtest_bundle.sh -r '<repo|repo2>' -k '<pattern>' --concise-output --tmpdir /work/<area>/integtest_tmp/<label>
 ```
-Integration tests have not yet been proven in this container. On the first run, if
-they fail on node resource checks (24 GB VM) or on the process manager, report that
-plainly with the triage summary. Don't add `--skip-resource-checks` or change the
-process manager unless the requester asked for it.
+Before the first integtest job in a container, do these on the host (quick, no `daq-job`):
+1. `bin/daq-stack status` must show `sshd: ok`. drunc's default `ssh-standalone` process
+   manager starts every app with `ssh <user>@dunedaq-app` (the loopback sshd on port 2222,
+   see README "Integration tests and sshd"). If it isn't ok, run `bin/daq-stack ensure`.
+   Without it, every test fails with `ssh: connect to host ... Connection refused`.
+2. Install `ps` and `jq` if they are missing. The image lacks both and they are only
+   needed for integtests, so the container doesn't install them at startup:
+   ```bash
+   podman exec dunedaq-app sh -c 'command -v ps && command -v jq' >/dev/null \
+     || podman exec -u root dunedaq-app dnf install -y -q --disablerepo=epel procps-ng jq
+   ```
+   They last until the container is recreated (`restart-if-idle`, reboot), so this
+   check is a no-op on later runs. If dnf fails (mirrors down, offline), go ahead anyway
+   and add a `warnings:` entry. Without them, the tests still run and give correct results:
+   the bundle script only uses `ps` for a `numad` check and `jq` to find the pytest
+   directory to copy when a test fails, and prints `ps: command not found` / a `jq` warning.
+3. `mkdir -p` the `--tmpdir` on the host (`work/<area>/integtest_tmp/<label>`). The
+   bundle script exits with `directory ... does not exist` (and exit code 0!) if it's missing.
+
+The bundle script's exit code is not reliable: always read the final
+`N passed / N failed` summary line from the log. Proven so far: `minimal_system_quick_test`
+passes (4/4, about 75 s). If tests fail on node resource checks (24 GB VM) or on the process
+manager, report that plainly with the triage summary. Don't add `--skip-resource-checks` or
+change the process manager unless the requester asked for it.
 
 **recipe-save / recipe-create**: `dbtx-save-workarea-recipe.py [--require-valid-refs] <name>`;
 `dbtx-create-workarea-from-recipe.py --use-ref --use-ssh-repos [--build] --workarea-name <area> <recipe.yaml>`.

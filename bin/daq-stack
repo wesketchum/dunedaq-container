@@ -3,8 +3,8 @@
 # Health and lifecycle of the Podman machine + CVMFS sidecar + DAQ container.
 #
 # Usage:
-#   bin/daq-stack status            machine / containers / real CVMFS read check
-#   bin/daq-stack ensure            start whatever is down (never recreates a running stack)
+#   bin/daq-stack status            machine / containers / real CVMFS read / loopback sshd check
+#   bin/daq-stack ensure            start whatever is down, incl. sshd (never recreates a running stack)
 #   bin/daq-stack restart-if-idle   ./restart.sh (fresh CVMFS cache), refused if jobs are active
 #
 # Exit codes: 0 healthy/done, 1 unhealthy, 5 refused because jobs are active.
@@ -22,6 +22,13 @@ cvmfs_ok() {
   # A real read, not `test -d` (the compose healthcheck is a false positive).
   podman exec dunedaq-app sh -c 'ls /cvmfs/dunedaq.opensciencegrid.org/setup_dunedaq.sh && ls /cvmfs/dunedaq-development.opensciencegrid.org/nightly' >/dev/null 2>&1
 }
+# End-to-end: the same `ssh user@host` that drunc's SSH process manager runs.
+sshd_ok() {
+  podman exec dunedaq-app ssh -o BatchMode=yes -o ConnectTimeout=5 dunedaq-app true >/dev/null 2>&1
+}
+start_sshd() {
+  podman exec dunedaq-app sh -c '[ -f /work/.ssh/sshd/sshd_config ] && /usr/sbin/sshd -f /work/.ssh/sshd/sshd_config -E /work/.ssh/sshd/sshd.log'
+}
 rootful_default() {
   podman system connection list --format '{{.Name}} {{.Default}}' 2>/dev/null | grep -q "^${MACHINE}-root true$"
 }
@@ -34,6 +41,7 @@ status() {
     if running "$c"; then echo "$c: $(podman ps --filter name=^$c$ --format '{{.Status}}')"; else echo "$c: DOWN"; ok=1; fi
   done
   if running dunedaq-app && cvmfs_ok; then echo "cvmfs:     readable"; else echo "cvmfs:     NOT readable"; ok=1; fi
+  if running dunedaq-app && sshd_ok; then echo "sshd:      ok (loopback, port 2222)"; else echo "sshd:      NOT reachable (integtests will fail; see work/.ssh/sshd/sshd.log)"; ok=1; fi
   echo "jobs:      $("$HERE/daq-job" active) active"
   return $ok
 }
@@ -48,7 +56,11 @@ ensure() {
     echo "Bringing the stack up..."
     podman-compose -f "$COMPOSE" up -d || return 1
   fi
-  for i in $(seq 1 30); do cvmfs_ok && { status; return 0; }; sleep 2; done
+  if ! sshd_ok; then
+    echo "Starting loopback sshd..."
+    start_sshd || echo "Could not start sshd (no work/.ssh/sshd/sshd_config? run ./setup.sh)"
+  fi
+  for i in $(seq 1 30); do cvmfs_ok && { status; return; }; sleep 2; done
   echo "CVMFS not readable after 60s. Check: podman logs dunedaq-cvmfs --tail 30"
   echo "If no jobs are running, try: bin/daq-stack restart-if-idle"
   return 1

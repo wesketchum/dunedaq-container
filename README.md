@@ -37,6 +37,8 @@ This creates:
 - `work/.bash_profile` — copied from `templates/bash_profile` (only if it doesn't already
   exist — re-running `setup.sh` never overwrites your copy). Sets up the Rosetta/spack
   workaround (see [Apple Silicon](#apple-silicon-m1m2m3m4m5)) and a `git_clone_dunedaq` helper.
+- `work/.ssh/` loopback-sshd files for integration tests (see
+  [Integration tests and sshd](#integration-tests-and-sshd)). Existing files are never overwritten.
 - `work/` — your persistent work directory (code, history, dotfiles)
 
 Not created by this script, but needed for a fully working environment — set these up
@@ -93,8 +95,14 @@ container, and other Claude sessions send it requests: create a work area, clone
 repos, build, run unit tests / lint / integration tests.
 
 ```bash
-cd ~/dunedaq-container && claude      # then: /dunedaq-env
+cd ~/dunedaq-container && claude --model sonnet      # then: /dunedaq-env
 ```
+
+Run the broker on Sonnet. Its work is mostly routine message handling and job
+dispatch, so Opus costs more without helping. Set the model at launch (or with
+`/model sonnet` before running `/dunedaq-env`). A `model:` line in the skill's
+frontmatter won't do it, because that override only lasts for the turn the skill
+is invoked in. Every later request message reverts to the session model.
 
 From any other session (e.g. one working in `~/dunedaq/all_repos`), use the
 `/dunedaq-env-client` skill, or just ask it to "have dunedaq-env build and unit-test X".
@@ -116,6 +124,30 @@ To make the client skill available in sessions outside this directory:
 ```bash
 ln -s ~/dunedaq-container/.claude/skills/dunedaq-env-client ~/.claude/skills/dunedaq-env-client
 ```
+
+## Integration tests and sshd
+
+drunc's default process manager (`ssh-standalone`) starts every DAQ app with
+`ssh <user>@<hostname>`, even when the whole system runs on one machine. Without an sshd,
+integtests fail with `ssh: connect to host ... port 22: Connection refused`.
+
+The official image already ships `openssh-server`, so this is all set up at run time and
+needs no custom image:
+- `compose.yaml` gives the container a stable hostname (`dunedaq-app`), and its entrypoint
+  starts a **non-root sshd on port 2222** before the login shell.
+- `setup.sh` writes the sshd config, host key, a separate loopback keypair
+  (`id_ed25519_loopback`, added to `authorized_keys`) and a `Host localhost 127.0.0.1
+  dunedaq-app` block in `work/.ssh/config` that points those names at port 2222. Other
+  hosts (e.g. GitHub) are unaffected.
+- `bin/daq-stack status` checks it end to end (an `ssh dunedaq-app true` inside the
+  container), and `bin/daq-stack ensure` restarts sshd if it has died. Log:
+  `work/.ssh/sshd/sshd.log`. Its warning that "'UsePAM no' is not supported in RHEL"
+  is expected: a non-root sshd can't use PAM.
+
+The bundle script's `ps` (numad check) and `jq` (copying failed-test dirs) aren't in the
+image. Both are optional and only produce warnings without them. The container doesn't
+install them at startup. The broker installs them (`dnf`, as root via `podman exec -u root`)
+before its first integtest in a container, and they last until the container is recreated.
 
 ## Customizing the Podman machine
 
@@ -178,6 +210,11 @@ The sidecar mounts the repositories listed in `CVMFS_REPOSITORIES` in `compose.y
 **Running as root inside the container instead of yourself**
 - Make sure `./setup.sh` has been run and `.env` exists in the repo directory.
 - Check that `work/container_passwd` exists and contains your username/UID.
+
+**Integtests fail with `ssh: connect to host ... Connection refused`**
+- Run `bin/daq-stack status`. If `sshd` is not reachable, run `bin/daq-stack ensure`.
+- If `work/.ssh/sshd/sshd_config` is missing, run `./setup.sh`. A container created before
+  the sshd change needs `bin/daq-stack restart-if-idle` so it picks up the hostname and entrypoint.
 
 **Permission errors on `./work`**
 - The `:Z` mount option applies SELinux relabeling, required for rootful Podman. Do not remove it.
