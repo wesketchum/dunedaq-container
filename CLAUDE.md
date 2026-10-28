@@ -15,12 +15,12 @@ from a sidecar container.
 - Stack health and lifecycle: `bin/daq-stack status|ensure|restart-if-idle`. Never run
   `restart.sh` or `podman-compose down` while jobs or interactive shells are active.
 - Agent setup: one long-lived session runs the `/dunedaq-env` skill (broker). Other sessions
-  use `/dunedaq-env-client` and talk to it via `SendMessage`; the protocol is
+  use `/dunedaq:dunedaq-env-client` (from the `dunedaq` plugin) and talk to it via `SendMessage`; the protocol is
   `.claude/skills/dunedaq-env/PROTOCOL.md`. Start the broker session on Sonnet
   (`claude --model sonnet`). A skill-frontmatter `model:` only lasts one turn, so it
   can't pin a long-lived broker.
 - DUNE-DAQ org knowledge (repo list, dependency layering): `~/dunedaq/all_repos/CLAUDE.md`.
   Release manifests: `~/dunedaq/all_repos/daq-release/configs/`. Version tagging is
-  `/tag-packages` in `~/dunedaq/all_repos`.
+  `/dunedaq:tag-packages`, run from `~/dunedaq/all_repos`.
 - `templates/bash_profile` is the source of truth for `work/.bash_profile`; `setup.sh` never
   overwrites an existing copy.

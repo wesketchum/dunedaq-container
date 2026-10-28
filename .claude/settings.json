@@ -9,7 +9,7 @@
       "Bash(git -C /Users/wketchum/dunedaq/all_repos/* log *)",
       "Bash(git -C /Users/wketchum/dunedaq/all_repos/* show *)",
       "Bash(git -C /Users/wketchum/dunedaq/all_repos/* ls-remote *)",
-      "Bash(python3 /Users/wketchum/dunedaq/all_repos/.claude/skills/tag-packages/resolve_build_packages.py *)",
+      "Bash(resolve-build-packages *)",
       "Read(/Users/wketchum/dunedaq/all_repos/**)",
       "Write(/Users/wketchum/dunedaq-container/work/.daq-jobs/broker)"
     ],

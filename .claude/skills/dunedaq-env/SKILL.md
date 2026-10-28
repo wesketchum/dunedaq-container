@@ -176,13 +176,12 @@ The second one runs at `/work`, so use `--new-area`. `dbt-create` is exported fr
   entry naming the higher-level packages that come from the release, not the area (they
   link against the release's copy). Offer to clone them. Don't do it unasked.
 - **What's in a release:** `~/dunedaq/all_repos/daq-release/configs/<fddaq|nddaq|coredaq>/<release>/release.yaml`.
-  `python3 ~/dunedaq/all_repos/.claude/skills/tag-packages/resolve_build_packages.py fddaq --json`
-  resolves the full package list, following the `base_release` chain.
+  `resolve-build-packages fddaq --json` (on `PATH` from the `dunedaq` plugin) resolves the full package list, following the `base_release` chain.
 - **Source of release packages not cloned locally:** `$DUNE_DAQ_RELEASE_SOURCE`
   (from `dbt-workarea-constants.sh`). Point requesters there instead of cloning just to read code.
 - Branch conventions (daq-release gitflow): features on `<user>/<topic>`, release work on
   `prep-release/<fd|nd>daq-vX.Y.Z`, patches on `patch/<fd|nd>daq-vX.Y.x`. Version tags
-  are handled by the `/tag-packages` skill in `~/dunedaq/all_repos`, not by you.
+  are handled by the `/dunedaq:tag-packages` skill (run from `~/dunedaq/all_repos`), not by you.
 - Known noise, not errors: `WARNING: unable to load the correct gcc-runtime` /
   `gcc-runtime@14.3.0 matches multiple packages` in areas on older (≤ Sep 2026) nightlies;
   `image platform (linux/amd64) does not match` from podman.
@@ -203,7 +202,7 @@ the requester's message. Pushing is blocked inside the container (`pushInsteadOf
 a requester wants something published, reply with the host path, branch, and the
 command for the **user** to run or approve from the host
 (`git -C <host_path>/sourcecode/<repo> push -u origin <branch>`). Version-bump PRs go
-through `/tag-packages` → `dune-github-publisher` in `~/dunedaq/all_repos`.
+through `/dunedaq:tag-packages` → `dunedaq:dune-github-publisher`, run from `~/dunedaq/all_repos`.
 
 ## Never
 
