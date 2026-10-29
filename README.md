@@ -112,6 +112,7 @@ container, and publishing is left to you.
 
 | Piece | Purpose |
 |---|---|
+| `AGENTS.md` | Instructions for AI agents working in this repo (`CLAUDE.md` just imports it) |
 | `bin/daq-exec` | Run a command in the container with the DAQ env set up correctly (handles the Rosetta `SPACK_ROOT` trap) |
 | `bin/daq-job` | Queue/run long jobs: one per work area, ≤2 total, integtests exclusive; state + logs in `work/.daq-jobs/` |
 | `bin/daq-stack` | `status` / `ensure` / `restart-if-idle` (refuses if jobs or interactive shells are active) |
