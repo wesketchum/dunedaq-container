@@ -59,7 +59,8 @@ One or two concrete next steps, using DUNE DAQ specifics:
 - `Could not find ... "<pkg>"` or undefined references to symbols from another DUNE-DAQ
   package → the dependency is missing from the area, or its version is mismatched with the
   release. Name the package and say whether cloning it into the area would fix it
-  (dependency layering is in `~/dunedaq/all_repos/CLAUDE.md`).
+  (each repo's direct dependencies and dependents are in the generated catalog: run
+  `dunedaq-catalog` for its path, or `dunedaq-catalog --json` for `depends_on`/`used_by`).
 - Errors in a package the requester did **not** change → likely an API change in a package
   they did change; name both.
 - `cvmfs-io` → `bin/daq-stack restart-if-idle`, then retry.

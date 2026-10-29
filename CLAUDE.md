@@ -19,7 +19,9 @@ from a sidecar container.
   `.claude/skills/dunedaq-env/PROTOCOL.md`. Start the broker session on Sonnet
   (`claude --model sonnet`). A skill-frontmatter `model:` only lasts one turn, so it
   can't pin a long-lived broker.
-- DUNE-DAQ org knowledge (repo list, dependency layering): `~/dunedaq/all_repos/CLAUDE.md`.
+- DUNE-DAQ org knowledge (repo list, dependencies, layering): the generated catalog from the
+  `dunedaq` plugin, `cat "$(dunedaq-catalog)"`. For what a release actually built,
+  `spack dependents --installed <pkg>` in an area's environment.
   Release manifests: `~/dunedaq/all_repos/daq-release/configs/`. Version tagging is
   `/dunedaq:tag-packages`, run from `~/dunedaq/all_repos`.
 - `templates/bash_profile` is the source of truth for `work/.bash_profile`; `setup.sh` never

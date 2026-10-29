@@ -170,11 +170,19 @@ The second one runs at `/work`, so use `--new-area`. `dbt-create` is exported fr
 
 ## DUNE DAQ knowledge to apply
 
-- **Dependency layering:** `~/dunedaq/all_repos/CLAUDE.md`. When a request clones a
-  low-level package (e.g. `daqdataformats`, `detdataformats`, `ers`, `logging`, `appfwk`,
-  `hdf5libs`) and the requester plans to change **public headers**, add a `warnings:`
-  entry naming the higher-level packages that come from the release, not the area (they
-  link against the release's copy). Offer to clone them. Don't do it unasked.
+- **Dependency layering:** when a request clones a low-level package (e.g. `daqdataformats`,
+  `detdataformats`, `ers`, `logging`, `appfwk`, `hdf5libs`) and the requester plans to change
+  **public headers**, add a `warnings:` entry naming the higher-level packages that come from
+  the release, not the area (they link against the release's copy). Offer to clone them.
+  Don't do it unasked.
+  - Ask the release itself: `spack dependents --installed --transitive <pkg>` in the area's
+    environment. It takes about a minute (mostly env setup), so run it as a `daq-job`. Drop the
+    umbrella bundles (`coredaq`, `fddaq`, `nddaq`), de-duplicate by name, and leave out packages
+    already cloned in the area. It reflects the release's installed packages, not the area's
+    `sourcecode/`.
+  - For org-wide context (repos outside the release, layering), read the generated catalog:
+    `cat "$(dunedaq-catalog)"`, or the `depends_on`/`used_by` fields in `$(dunedaq-catalog --json)`
+    (`dunedaq-catalog` comes from the `dunedaq` plugin).
 - **What's in a release:** `~/dunedaq/all_repos/daq-release/configs/<fddaq|nddaq|coredaq>/<release>/release.yaml`.
   `resolve-build-packages fddaq --json` (on `PATH` from the `dunedaq` plugin) resolves the full package list, following the `base_release` chain.
 - **Source of release packages not cloned locally:** `$DUNE_DAQ_RELEASE_SOURCE`
