@@ -71,14 +71,11 @@ Failure triage stays with the client: hand `steps[].log` to the `daq-log-triage`
 
 ## Using it from a session
 
-Register it once, for all your sessions (run on the host):
-
-```bash
-claude mcp add --scope user daq-jobd -- /Users/wketchum/dunedaq-container/bin/daq-jobd mcp
-```
-
-`.mcp.json` in this repo also registers it for sessions started here. Claude Code asks you
-to approve it the first time.
+It comes with the `dunedaq` plugin (ai_tools `repos/dunedaq-ai-tools`), which registers
+`${user_config.container_dir}/bin/daq-jobd mcp` as the `daq-jobd` MCP server. Any settings
+profile with the plugin installed gets it, and `/mcp` shows it as `plugin:dunedaq:daq-jobd`.
+Without the plugin, register it by hand:
+`claude mcp add --scope user daq-jobd -- <this repo>/bin/daq-jobd mcp`.
 
 The usual pattern:
 
