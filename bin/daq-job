@@ -16,14 +16,18 @@
 #   bin/daq-job log ID [N]      last N lines of a job's log (default 60)
 #   bin/daq-job cancel ID       stop a queued or running job
 #   bin/daq-job active          print number of queued+running jobs; exit 0 if any, 1 if none
+#   bin/daq-job reap            remove locks whose owner has died
 #
 # State lives in work/.daq-jobs/<ID>/ (visible in the container as /work/.daq-jobs).
+# Jobs and locks can also belong to the daq-jobd service inside the container
+# (jobd/daq_jobd.py). Those carry a ctr_runner / ctr_owner file ("<pid> <start
+# time>" in the container) instead of a host runner_pid.
 
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(dirname "$HERE")"
-JOBS="$ROOT/work/.daq-jobs"
+JOBS="${DAQ_JOBS_HOST_DIR:-$ROOT/work/.daq-jobs}"
 LOCKS="$JOBS/locks"
 MAX_SLOTS=2
 POLL=5
@@ -36,15 +40,49 @@ getf() { [ -f "$JOBS/$1/$2" ] && cat "$JOBS/$1/$2" || true; }
 # Job dirs only (skips locks/ and the broker name file), oldest first.
 job_ids() { local d; for d in "$JOBS"/*/; do [ -f "$d/state" ] && basename "$d"; done | sort; }
 
+# Is a daq-jobd process ("<pid> <start time>", from a ctr_* file) alive in the
+# container? Unknown (podman hiccup with the container up) counts as alive.
+ctr_alive() {
+  local pid start out
+  read -r pid start < "$1" 2>/dev/null || return 1
+  [ -n "$pid" ] || return 1
+  # Fields after "comm) ": 1 is the state (Z = zombie, i.e. dead), 20 the start time.
+  if out=$(podman exec dunedaq-app sh -c "sed 's/.*) //' /proc/$pid/stat | cut -d' ' -f1,20" 2>/dev/null); then
+    [ "$out" = "S $start" ] || [ "$out" = "R $start" ] || [ "$out" = "D $start" ] || [ "$out" = "T $start" ]
+  else
+    podman ps --format '{{.Names}}' 2>/dev/null | grep -q '^dunedaq-app$'
+  fi
+}
+
 # ── locking (mkdir is atomic; owner pid lets us reap locks of dead runners) ──
+lock_dead() {  # lock_dead DIR -> 0 if its owner is known to be gone
+  local d=$1 pid
+  if [ -f "$d/ctr_owner" ]; then ! ctr_alive "$d/ctr_owner"; return; fi
+  # No owner file a minute after mkdir: its creator died before writing it.
+  if [ ! -f "$d/owner" ]; then [ -n "$(find "$d" -maxdepth 0 -mmin +1 2>/dev/null)" ]; return; fi
+  pid=$(awk '{print $2}' "$d/owner" 2>/dev/null || true)
+  [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null
+}
+
+# Remove a dead lock. Reapers (here and daq_jobd.py) hold the locks/.reap mutex and
+# re-check inside it, so two never both remove a lock one of them has just re-taken.
+reap_lock() {  # reap_lock DIR -> 0 if removed
+  local m="$LOCKS/.reap" rc=1
+  if ! mkdir "$m" 2>/dev/null; then
+    [ -n "$(find "$m" -maxdepth 0 -mmin +1 2>/dev/null)" ] && rmdir "$m" 2>/dev/null
+    return 1
+  fi
+  if [ -d "$1" ] && lock_dead "$1"; then rm -rf "$1"; rc=0; fi
+  rmdir "$m"
+  return $rc
+}
+
 try_lock() {  # try_lock NAME ID -> 0 if acquired
   local d="$LOCKS/$1"
   if mkdir "$d" 2>/dev/null; then
     echo "$2 $$" > "$d/owner"; return 0
   fi
-  local pid; pid=$(awk '{print $2}' "$d/owner" 2>/dev/null || true)
-  if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
-    rm -rf "$d"
+  if lock_dead "$d" && reap_lock "$d"; then
     mkdir "$d" 2>/dev/null && { echo "$2 $$" > "$d/owner"; return 0; }
   fi
   return 1
@@ -79,7 +117,10 @@ queue_position() {  # number of queued jobs created before this one
 }
 
 # A queued/running job whose runner pid is gone is stale (e.g. host reboot).
-alive() { local pid; pid=$(getf "$1" runner_pid); [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; }
+alive() {
+  [ -f "$JOBS/$1/ctr_runner" ] && { ctr_alive "$JOBS/$1/ctr_runner"; return; }
+  local pid; pid=$(getf "$1" runner_pid); [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
 effective_state() {
   local s; s=$(getf "$1" state)
   case "$s" in queued|running) alive "$1" || s="lost" ;; esac
@@ -187,6 +228,15 @@ cmd_cancel() {
   echo "cancelled $id"
 }
 
+cmd_reap() {
+  local d
+  for d in "$LOCKS"/*/; do
+    [ -d "$d" ] || continue
+    lock_dead "${d%/}" && reap_lock "${d%/}" && echo "reaped $(basename "$d")"
+  done
+  return 0
+}
+
 cmd_active() {
   local n=0 j
   for j in $(job_ids); do
@@ -203,5 +253,6 @@ case "$sub" in
   log)    cmd_log "$@" ;;
   cancel) cmd_cancel "$@" ;;
   active) cmd_active ;;
-  *)      sed -n '2,20p' "$0"; exit 2 ;;
+  reap)   cmd_reap ;;
+  *)      sed -n '2,25p' "$0"; exit 2 ;;
 esac

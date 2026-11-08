@@ -19,6 +19,9 @@ from a sidecar container.
   `.claude/skills/dunedaq-env/PROTOCOL.md`. Start the broker session on Sonnet
   (`claude --model sonnet`). A skill-frontmatter `model:` only lasts one turn, so it
   can't pin a long-lived broker.
+- `daq-jobd` (experimental, `jobd/README.md`): the same requests as MCP tools, served from
+  inside the container by `bin/daq-jobd mcp`, with no broker session in between. It shares
+  `work/.daq-jobs` and its locks with `bin/daq-job`, so it can run alongside the broker.
 - DUNE-DAQ org knowledge (repo list, dependencies, layering): the generated catalog from the
   `dunedaq` plugin, `cat "$(dunedaq-catalog)"`. For what a release actually built,
   `spack dependents --installed <pkg>` in an area's environment.

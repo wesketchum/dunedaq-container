@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "daq-jobd": {
+      "command": "./bin/daq-jobd",
+      "args": ["mcp"]
+    }
+  }
+}
