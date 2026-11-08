@@ -1194,8 +1194,19 @@ INSTRUCTIONS = """DUNE DAQ job service (daq-jobd), running inside the dunedaq-ap
 - Edit code on the host at the area's host_path (same files as /work/<area> in the container).
 - Nothing is ever pushed; git pushes are blocked in the container. Publishing is the user's call.
 - One job per area, two in total, integtests alone: requests queue rather than fail.
-- Deleting or recreating a work area is not offered; ask the user.
-- On a failed step, hand the log path to the daq-log-triage agent rather than reading big logs."""
+- For long requests run `{C}/bin/daq-jobd wait <id>` in the background instead of polling.
+- On a failed step, hand the log path to the daq-log-triage agent rather than reading big logs.
+- No broker session looks after the stack; you do, on the host:
+  container down or tools failing: `{C}/bin/daq-stack status`, then `{C}/bin/daq-stack ensure`;
+  failure class cvmfs-io: `{C}/bin/daq-stack restart-if-idle` (refuses while jobs run: tell the
+  user and wait; never cancel others' work to force it), then resubmit.
+  Never run restart.sh or podman-compose down. Deleting or recreating a work area: ask the user.
+  The /dunedaq:dunedaq-env-client skill has the full list."""
+
+
+def instructions():
+    # The container repo is the parent of the host directory mounted at /work.
+    return INSTRUCTIONS.replace("{C}", os.path.dirname(HOST_WORK) if HOST_WORK else "<dunedaq-container>")
 
 
 def call_tool(name, a):
@@ -1231,7 +1242,7 @@ def handle(msg):
         res = {"protocolVersion": want if want in PROTOCOLS else PROTOCOLS[0],
                "capabilities": {"tools": {}},
                "serverInfo": {"name": "daq-jobd", "version": VERSION},
-               "instructions": INSTRUCTIONS}
+               "instructions": instructions()}
     elif method == "ping":
         res = {}
     elif method == "tools/list":

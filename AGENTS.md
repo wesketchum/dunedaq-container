@@ -14,14 +14,12 @@ from a sidecar container.
   status` checks it; `ensure` revives it. No custom image: the official one ships sshd.
 - Stack health and lifecycle: `bin/daq-stack status|ensure|restart-if-idle`. Never run
   `restart.sh` or `podman-compose down` while jobs or interactive shells are active.
-- Agent setup (Claude Code): one long-lived session runs the `/dunedaq-env` skill (broker). Other sessions
-  use `/dunedaq:dunedaq-env-client` (from the `dunedaq` plugin) and talk to it via `SendMessage`; the protocol is
-  `.claude/skills/dunedaq-env/PROTOCOL.md`. Start the broker session on Sonnet
-  (`claude --model sonnet`). A skill-frontmatter `model:` only lasts one turn, so it
-  can't pin a long-lived broker.
-- `daq-jobd` (experimental, `jobd/README.md`): the same requests as MCP tools, served from
-  inside the container by `bin/daq-jobd mcp`, with no broker session in between. It shares
-  `work/.daq-jobs` and its locks with `bin/daq-job`, so it can run alongside the broker.
+- Agent setup (Claude Code): sessions build and test through the `daq-jobd` MCP tools
+  (`jobd/README.md`), which the `dunedaq` plugin registers; `/dunedaq:dunedaq-env-client`
+  says how, including the stack upkeep above that no broker does for them. The older broker
+  (a long-lived session running `/dunedaq-env`, protocol `.claude/skills/dunedaq-env/PROTOCOL.md`)
+  still works and shares the same queue. Start it on Sonnet (`claude --model sonnet`): a
+  skill-frontmatter `model:` only lasts one turn.
 - DUNE-DAQ org knowledge (repo list, dependencies, layering): the generated catalog from the
   `dunedaq` plugin, `cat "$(dunedaq-catalog)"`. For what a release actually built,
   `spack dependents --installed <pkg>` in an area's environment.
