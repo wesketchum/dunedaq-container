@@ -99,7 +99,7 @@ warnings: ["daqdataformats changed public headers; 4 release packages in this ar
   edits source unless a `format` step is requested.
 - **Nothing is ever pushed.** Pushes are blocked inside the container. The broker
   reports branch + host path; publishing is the user's call, made from the host
-  (see the `dune-github-publisher` agent in `~/dunedaq/all_repos`).
+  (see the `dunedaq:dune-github-publisher` agent from the `dunedaq` plugin).
 - **One job per area, two jobs total, integtests alone.** Requests queue
   instead of failing.
 - The broker will **refuse**: deleting or overwriting a work area (the user must confirm

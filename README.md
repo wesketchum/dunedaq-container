@@ -105,24 +105,27 @@ frontmatter won't do it, because that override only lasts for the turn the skill
 is invoked in. Every later request message reverts to the session model.
 
 From any other session (e.g. one working in `~/dunedaq/all_repos`), use the
-`/dunedaq-env-client` skill, or just ask it to "have dunedaq-env build and unit-test X".
+`/dunedaq:dunedaq-env-client` skill, or just ask it to "have dunedaq-env build and unit-test X".
 Peers edit code directly in `work/<area>/sourcecode/` on the host; the broker runs
 everything in the container. It never pushes. Pushes are blocked inside the
 container, and publishing is left to you.
 
 | Piece | Purpose |
 |---|---|
+| `AGENTS.md` | Instructions for AI agents working in this repo (`CLAUDE.md` just imports it) |
 | `bin/daq-exec` | Run a command in the container with the DAQ env set up correctly (handles the Rosetta `SPACK_ROOT` trap) |
 | `bin/daq-job` | Queue/run long jobs: one per work area, ≤2 total, integtests exclusive; state + logs in `work/.daq-jobs/` |
 | `bin/daq-stack` | `status` / `ensure` / `restart-if-idle` (refuses if jobs or interactive shells are active) |
 | `.claude/skills/dunedaq-env/` | Broker instructions + `PROTOCOL.md` (message format) |
-| `.claude/skills/dunedaq-env-client/` | How peer sessions make requests |
 | `.claude/agents/daq-log-triage.md` | Read-only subagent that diagnoses failed build/test logs |
 
-To make the client skill available in sessions outside this directory:
+The client skill for peer sessions comes from the `dunedaq` Claude Code plugin
+([dunedaq-ai-tools](https://github.com/wesketchum/dunedaq-ai-tools)), which also puts
+`resolve-build-packages` on the `PATH` for the broker:
 
-```bash
-ln -s ~/dunedaq-container/.claude/skills/dunedaq-env-client ~/.claude/skills/dunedaq-env-client
+```
+/plugin marketplace add wesketchum/dunedaq-ai-tools
+/plugin install dunedaq@dunedaq-ai-tools
 ```
 
 ## Integration tests and sshd

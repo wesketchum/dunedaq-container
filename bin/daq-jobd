@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# bin/daq-jobd
+# Host side of the daq-jobd job service (jobd/daq_jobd.py), which runs inside
+# dunedaq-app. Clients talk to it over MCP; see jobd/README.md.
+#
+# Usage:
+#   bin/daq-jobd mcp              MCP server on stdin/stdout (what .mcp.json runs)
+#   bin/daq-jobd wait ID [SECS]   block until request ID ends, polling its state file on
+#                                 the host every SECS (default 15); prints
+#                                 "REQUEST-ENDED <status> <id>". For Monitor/background use.
+#   bin/daq-jobd submit|result|list|cancel ...   the daq_jobd.py command line, in the container
+#
+# Every start copies jobd/daq_jobd.py to work/.daq-jobd/ (the container sees only
+# /work) and reaps locks left by dead host-side bin/daq-job runners, which the
+# container cannot check. DAQ_JOBS_DIR (a /work/... path) selects another job
+# directory, e.g. for testing.
+
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(dirname "$HERE")"
+CONTAINER="dunedaq-app"
+JOBS_CTR="${DAQ_JOBS_DIR:-/work/.daq-jobs}"
+
+die() { echo "daq-jobd: $*" >&2; exit "${2:-2}"; }
+
+# Host directory mounted at /work (also the prefix for host paths in results).
+host_work() {
+  podman inspect "$CONTAINER" \
+    --format '{{range .Mounts}}{{if eq .Destination "/work"}}{{.Source}}{{end}}{{end}}' 2>/dev/null
+}
+
+running() { podman ps --format '{{.Names}}' 2>/dev/null | grep -q "^${CONTAINER}$"; }
+
+install_service() {
+  local dest="$1/.daq-jobd"
+  mkdir -p "$dest"
+  if ! cmp -s "$ROOT/jobd/daq_jobd.py" "$dest/daq_jobd.py"; then
+    cp "$ROOT/jobd/daq_jobd.py" "$dest/daq_jobd.py.tmp.$$"
+    mv "$dest/daq_jobd.py.tmp.$$" "$dest/daq_jobd.py"
+  fi
+}
+
+in_container() {  # in_container HOST_WORK [podman exec flags] -- args...
+  local hw="$1"; shift
+  local flags=()
+  while [ "$1" != "--" ]; do flags+=("$1"); shift; done; shift
+  # The host's timezone, so job ids (timestamps) sort together with bin/daq-job's.
+  local tz; tz=$(readlink /etc/localtime 2>/dev/null | sed -n 's|.*/zoneinfo/||p')
+  exec podman exec ${flags[@]+"${flags[@]}"} -e DAQ_HOST_WORK="$hw" -e DAQ_JOBS_DIR="$JOBS_CTR" -e TZ="${tz:-UTC}" \
+    "$CONTAINER" python3 -I /work/.daq-jobd/daq_jobd.py "$@"
+}
+
+cmd_wait() {
+  local id=${1:?request id} every=${2:-15} hw st
+  hw=$(host_work); [ -n "$hw" ] || hw="$ROOT/work"
+  local f="$hw${JOBS_CTR#/work}/requests/$id.state"
+  [ -f "$f" ] || die "no request $id ($f)"
+  while :; do
+    st=$(cat "$f" 2>/dev/null || true)
+    case "$st" in
+      ok|failed|cancelled) echo "REQUEST-ENDED $st $id"; return 0 ;;
+    esac
+    # A runner that died never writes a final state; ask the service.
+    if [ -n "$(find "$f" -mmin +30 2>/dev/null)" ] && running \
+       && "$0" result "$id" | grep -q '"status": "lost"'; then
+      echo "REQUEST-ENDED lost $id"; return 0
+    fi
+    sleep "$every"
+  done
+}
+
+sub=${1:-}; shift || true
+case "$sub" in
+  wait) cmd_wait "$@" ;;
+  mcp|submit|result|list|cancel)
+    running || die "container $CONTAINER is not running; run bin/daq-stack ensure" 3
+    hw=$(host_work); [ -n "$hw" ] || die "cannot find the host directory mounted at /work" 3
+    install_service "$hw"
+    DAQ_JOBS_HOST_DIR="$hw${JOBS_CTR#/work}" "$HERE/daq-job" reap >/dev/null 2>&1 || true
+    if [ "$sub" = mcp ]; then in_container "$hw" -i -- mcp
+    else in_container "$hw" -- "$sub" "$@"; fi
+    ;;
+  *) sed -n '2,18p' "$0"; exit 2 ;;
+esac

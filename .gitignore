@@ -7,3 +7,6 @@ work/
 
 # Claude Code: personal, machine-local settings
 .claude/settings.local.json
+
+# Python bytecode
+__pycache__/
