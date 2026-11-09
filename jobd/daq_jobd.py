@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""daq-jobd: the DUNE DAQ job service. Runs inside the dunedaq-app container.
+"""daq-jobd: the DUNE DAQ job service. Runs inside the dunedaq-app container, or
+natively on a Linux host with CVMFS (a "native host", configured by DAQ_JOBD_CONF).
 
 Takes DAQ requests (create, clone, build, unittest, lint, integtest, ...; the step
 set of .claude/skills/dunedaq-env/PROTOCOL.md) as MCP tool calls, runs each request
@@ -12,7 +13,12 @@ jobs in total, integration tests alone.
   daq_jobd.py submit JSON          submit a request ({"area": ..., "steps": [...]})
   daq_jobd.py result ID [WAIT_S]   print a request's result, optionally waiting for it
   daq_jobd.py list | cancel ID     recent requests / cancel one
+  daq_jobd.py wait ID [SECS]       block until request ID ends; prints REQUEST-ENDED <status> <id>
   daq_jobd.py run-request ID       the detached runner (internal)
+
+Host settings (work root, environment setup, slots, git mirror, ...) default to the
+container's and can be replaced by a KEY=VALUE file named by $DAQ_JOBD_CONF; see
+jobd/native.conf.example and jobd/README.md, "Native hosts".
 
 Container-owned locks and jobs are marked with a `ctr_owner` / `ctr_runner` file
 ("<pid> <proc start time>"), because the host cannot see container pids and vice
@@ -32,25 +38,70 @@ import subprocess
 import sys
 import time
 
-WORK = "/work"
-JOBS = os.environ.get("DAQ_JOBS_DIR") or WORK + "/.daq-jobs"
+POLL = 5
+VERSION = "0.2.0"
+
+# Host settings. The defaults are the dunedaq-app container's; $DAQ_JOBD_CONF names a
+# KEY=VALUE file that overrides them (jobd/native.conf.example). {work} and {area} in
+# the SETUP_* commands are filled in per job.
+CONF = {
+    "MODE": "container",          # container | native
+    "HOST_LABEL": "",             # shown in results, e.g. daq.fnal.gov
+    "WORK": "/work",              # where work areas live
+    "JOBS": "",                   # job records and locks; default WORK/.daq-jobs
+    "MAX_SLOTS": "2",
+    "DEFAULT_JOBS": "",           # dbt-build -j when a request gives none (empty: dbt's choice)
+    "SETUP_ROOT": "cd {work} && source /cvmfs/dunedaq.opensciencegrid.org/setup_dunedaq.sh"
+                  " && setup_dbt latest",
+    "SETUP_AREA": "cd {work}/{area} && spackroot && source ./env.sh && _dbt_export_spack_fns",
+    "GIT_URL": "git@github.com:DUNE-DAQ/{repo}.git",
+    "MIRROR": "",                 # bare mirror (jobd/update_mirror.sh); clone/checkout use it
+    "RECIPE_SSH_REPOS": "1",      # dbtx-create-workarea-from-recipe.py --use-ssh-repos
+    "SELF_SSH_HOST": "dunedaq-app",  # what drunc's ssh process manager connects to
+}
+
+
+def load_conf(path):
+    with open(path) as f:
+        for n, line in enumerate(f, 1):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            key, sep, value = line.partition("=")
+            key, value = key.strip(), value.strip()
+            if not sep or key not in CONF:
+                raise SystemExit("daq-jobd: %s:%d: unknown setting %r" % (path, n, key))
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+                value = value[1:-1]
+            CONF[key] = value
+
+
+if os.environ.get("DAQ_JOBD_CONF"):
+    load_conf(os.environ["DAQ_JOBD_CONF"])
+
+
+def _path(v):
+    return os.path.abspath(os.path.expandvars(os.path.expanduser(v))) if v else ""
+
+
+NATIVE = CONF["MODE"] == "native"
+WORK = _path(CONF["WORK"])
+JOBS = _path(os.environ.get("DAQ_JOBS_DIR") or CONF["JOBS"]) or os.path.join(WORK, ".daq-jobs")
 LOCKS = os.path.join(JOBS, "locks")
 REQS = os.path.join(JOBS, "requests")
 HOST_WORK = os.environ.get("DAQ_HOST_WORK", "")
-MAX_SLOTS = 2
-POLL = 5
-VERSION = "0.1.0"
+MAX_SLOTS = int(CONF["MAX_SLOTS"])
+MIRROR = _path(CONF["MIRROR"])
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 REF_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._/+-]*$")
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\[K")
 BEGIN = "DAQJOBD-BEGIN"
 
-SETUP_ROOT = ("cd /work && source /cvmfs/dunedaq.opensciencegrid.org/setup_dunedaq.sh"
-              " && setup_dbt latest")
-SETUP_AREA = "cd /work/{area} && spackroot && source ./env.sh && _dbt_export_spack_fns"
+SETUP_ROOT = CONF["SETUP_ROOT"].replace("{work}", shlex.quote(WORK))
+SETUP_AREA = CONF["SETUP_AREA"].replace("{work}", shlex.quote(WORK))
 
-# Pushes are impossible from the container: GitHub URLs map to an invalid scheme.
+# Pushes to GitHub are impossible from jobs: GitHub URLs map to an invalid scheme.
 # An exec step can still undo this; it guards against mistakes, not against intent.
 GIT_ENV = {"GIT_CONFIG_COUNT": "3"}
 for _i, _url in enumerate(("git@github.com:", "https://github.com/", "ssh://git@github.com/")):
@@ -384,17 +435,18 @@ def run_job(req, label, cmd, env="area", exclusive=False):
         write(os.path.join(d, "started"), now())
 
         if env == "area":
-            setup = SETUP_AREA.format(area=area)
+            setup = SETUP_AREA.replace("{area}", area)
         elif env == "root":
             setup = SETUP_ROOT
         else:
-            setup = "cd /work/%s" % area
+            setup = "cd %s" % q(os.path.join(WORK, area))
         script = ("{ %s ; } || { echo 'daq-jobd: environment setup failed' >&2; exit 4; }\n"
                   "echo %s\n%s\n" % (setup, BEGIN, cmd))
         with open(log, "ab") as out:
             CHILD = subprocess.Popen(["bash", "-lc", script], stdin=subprocess.DEVNULL,
                                      stdout=out, stderr=subprocess.STDOUT, cwd=WORK,
-                                     env=dict(os.environ, **GIT_ENV), start_new_session=True)
+                                     env=dict(os.environ, DAQJOBD_MIRROR=MIRROR, **GIT_ENV),
+                                     start_new_session=True)
             write(os.path.join(d, "container_pgid"), str(CHILD.pid))
             rc = CHILD.wait()
         # bin/daq-job cancel (on the host) kills the process group and marks the job.
@@ -509,7 +561,8 @@ def step_create(req, a):
 
 
 def step_recipe_create(req, a):
-    cmd = "dbtx-create-workarea-from-recipe.py --use-ref --use-ssh-repos %s--workarea-name %s %s" % (
+    cmd = "dbtx-create-workarea-from-recipe.py --use-ref %s%s--workarea-name %s %s" % (
+        "--use-ssh-repos " if CONF["RECIPE_SSH_REPOS"] == "1" else "",
         "--build " if a.get("build") else "", q(req["area"]), q(a["recipe"]))
     jid, rc, text = run_job(req, "recipe-create", cmd, env="root")
     if rc == 0:
@@ -517,10 +570,56 @@ def step_recipe_create(req, a):
     return step_result("recipe-create", jid, rc, text, detail=req.get("release", ""))
 
 
+# Shell helpers for clone/checkout from MIRROR. In a work clone, `daqfnal/*` are the
+# branches pushed to the mirror from your own machine and `origin/*` are GitHub's
+# (as of the mirror's last hourly update). A ref resolves to a pushed branch first,
+# then a GitHub branch, a tag, a commit. Branches get a local branch tracking their
+# source; that refuses to drop commits made locally on the host.
+MIRROR_SH = r'''
+daqjobd_fetch() {  # DIR REPO
+  git -C "$1" remote get-url daqfnal >/dev/null 2>&1 || git -C "$1" remote add daqfnal "$DAQJOBD_MIRROR/$2.git"
+  git -C "$1" fetch -q --prune daqfnal &&
+    git -C "$1" fetch -q --prune "$DAQJOBD_MIRROR/$2.git" '+refs/remotes/origin/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
+}
+daqjobd_resolve() {  # DIR REF -> checks it out, prints the source
+  local d=$1 ref=$2 src=
+  if git -C "$d" show-ref -q --verify "refs/remotes/daqfnal/$ref"; then src=daqfnal/$ref
+  elif git -C "$d" show-ref -q --verify "refs/remotes/origin/$ref"; then src=origin/$ref
+  elif git -C "$d" show-ref -q --verify "refs/tags/$ref"; then
+    git -C "$d" checkout -q --detach "refs/tags/$ref" && echo "tag $ref"; return
+  elif git -C "$d" rev-parse -q --verify "$ref^{commit}" >/dev/null; then
+    git -C "$d" checkout -q --detach "$ref" && echo "commit"; return
+  else echo "DAQJOBD error $ref is not a pushed branch, GitHub branch, tag or commit in the mirror"; return 1
+  fi
+  if git -C "$d" show-ref -q --verify "refs/heads/$ref" && [ -n "$(git -C "$d" rev-list "$src..refs/heads/$ref")" ]; then
+    echo "DAQJOBD error local branch $ref has commits that $src does not"; return 1
+  fi
+  git -C "$d" checkout -q -B "$ref" --track "$src" && echo "$src"
+}
+'''
+
+
+def mirror_clone_sh(repo, ref):
+    return (
+        "t=$(mktemp -d .daqjobd-clone.XXXXXX) && r=\"$t/%(repo)s\" && git init -q \"$r\" && "
+        "git -C \"$r\" remote add origin %(url)s && daqjobd_fetch \"$r\" %(repo)s && "
+        "src=$(daqjobd_resolve \"$r\" %(ref)s) && "
+        "if [ -f \"$r/pyproject.toml\" ] && [ ! -f \"$r/CMakeLists.txt\" ]; "
+        "then d=pythoncode; else d=sourcecode; fi && mkdir -p $d && [ ! -e $d/%(repo)s ] && "
+        "mv \"$r\" $d/ && rmdir \"$t\" && "
+        "echo \"DAQJOBD clone %(repo)s@%(ref_txt)s from $src ($(git -C $d/%(repo)s rev-parse --short HEAD)) -> $d\" "
+        "|| { echo \"$src\" | grep '^DAQJOBD'; rm -rf \"$t\"; echo 'DAQJOBD error clone of %(repo)s@%(ref_txt)s failed'; exit 9; }"
+        % {"repo": repo, "ref": q(ref), "ref_txt": ref, "url": q(CONF["GIT_URL"].replace("{repo}", repo))})
+
+
 def step_clone(req, a):
+    if MIRROR:
+        cmd = MIRROR_SH + "\n".join(mirror_clone_sh(repo, ref) for repo, ref in a["repos"])
+        jid, rc, text = run_job(req, "clone", cmd, env="none")
+        return clone_result(req, a, jid, rc, text)
     parts = []
     for repo, ref in a["repos"]:
-        url = "git@github.com:DUNE-DAQ/%s.git" % repo
+        url = CONF["GIT_URL"].replace("{repo}", repo)
         parts.append(
             "t=$(mktemp -d .daqjobd-clone.XXXXXX) && "
             "{ git clone -q -b %(ref)s %(url)s \"$t/%(repo)s\" 2>/dev/null || "
@@ -533,6 +632,10 @@ def step_clone(req, a):
             "|| { rm -rf \"$t\"; echo 'DAQJOBD error clone of %(repo)s@%(ref)s failed'; exit 9; }"
             % {"repo": repo, "ref": q(ref), "url": url})
     jid, rc, text = run_job(req, "clone", "\n".join(parts), env="none")
+    return clone_result(req, a, jid, rc, text)
+
+
+def clone_result(req, a, jid, rc, text):
     warnings = []
     for repo, _ in a["repos"]:
         if repo in LOW_LEVEL:
@@ -551,15 +654,22 @@ def step_clone(req, a):
 def step_checkout(req, a):
     parts = []
     for repo, ref in a["repos"]:
-        parts.append(
-            repo_dir_sh(repo) +
-            "if [ -n \"$(git -C $d status --porcelain --untracked-files=no)\" ]; then "
-            "echo \"DAQJOBD error %(repo)s has uncommitted changes:\"; "
-            "git -C $d status --short --untracked-files=no; exit 9; fi; "
-            "git -C $d fetch -q --tags origin && git -C $d checkout -q %(ref)s && "
-            "echo \"DAQJOBD checkout %(repo)s@%(ref)s ($(git -C $d rev-parse --short HEAD))\" || exit 9"
-            % {"repo": repo, "ref": q(ref)})
-    jid, rc, text = run_job(req, "checkout", "\n".join(parts), env="none")
+        dirty = (repo_dir_sh(repo) +
+                 "if [ -n \"$(git -C $d status --porcelain --untracked-files=no)\" ]; then "
+                 "echo \"DAQJOBD error %s has uncommitted changes:\"; "
+                 "git -C $d status --short --untracked-files=no; exit 9; fi; " % repo)
+        if MIRROR:
+            parts.append(
+                dirty + "daqjobd_fetch $d %(repo)s && src=$(daqjobd_resolve $d %(ref)s) && "
+                "echo \"DAQJOBD checkout %(repo)s@%(ref_txt)s from $src ($(git -C $d rev-parse --short HEAD))\" "
+                "|| { echo \"$src\" | grep '^DAQJOBD'; exit 9; }"
+                % {"repo": repo, "ref": q(ref), "ref_txt": ref})
+        else:
+            parts.append(
+                dirty + "git -C $d fetch -q --tags origin && git -C $d checkout -q %(ref)s && "
+                "echo \"DAQJOBD checkout %(repo)s@%(ref)s ($(git -C $d rev-parse --short HEAD))\" || exit 9"
+                % {"repo": repo, "ref": q(ref)})
+    jid, rc, text = run_job(req, "checkout", (MIRROR_SH if MIRROR else "") + "\n".join(parts), env="none")
     return step_result("checkout", jid, rc, text, detail=", ".join(markers(text, "checkout")))
 
 
@@ -602,7 +712,7 @@ def step_build(req, a):
         flags.append("--clean")
     if a.get("debug"):
         flags.append("--debug")
-    jobs = a.get("jobs") or (6 if running_jobs() else None)
+    jobs = a.get("jobs") or CONF["DEFAULT_JOBS"] or (6 if running_jobs() else None)
     if jobs:
         flags.append("-j %d" % int(jobs))
     if a.get("optimize"):
@@ -699,7 +809,7 @@ def parse_integtest(text):
 
 def step_integtest(req, a):
     label = "integtest-%s" % time.strftime("%H%M%S")
-    tmpdir = "/work/%s/integtest_tmp/%s-%s" % (req["area"], req["id"], label)
+    tmpdir = os.path.join(WORK, req["area"], "integtest_tmp", "%s-%s" % (req["id"], label))
     opts = ["-r %s" % q(a.get("repos", "daqsystemtest"))]
     if a.get("include"):
         opts.append("-k %s" % q(a["include"]))
@@ -709,12 +819,17 @@ def step_integtest(req, a):
         opts.append("-s %s" % q(a["suite"]))
     if a.get("pytest_options"):
         opts.append("--pytest-options %s" % q(a["pytest_options"]))
-    cmd = ("ssh -o BatchMode=yes -o ConnectTimeout=5 dunedaq-app true || "
-           "{ echo 'DAQJOBD error loopback sshd (dunedaq-app:2222) not reachable; on the host run "
-           "bin/daq-stack ensure'; exit 7; }\n"
+    if NATIVE:
+        fix_ssh = "passwordless ssh from this host to itself is needed for drunc's process manager"
+        fix_tools = "harmless; ask the host's admins"
+    else:
+        fix_ssh = "on the host run bin/daq-stack ensure (loopback sshd, port 2222)"
+        fix_tools = ("harmless; install on the host: podman exec -u root dunedaq-app dnf install -y -q "
+                     "--disablerepo=epel procps-ng jq")
+    cmd = ("ssh -o BatchMode=yes -o ConnectTimeout=5 %s true || "
+           "{ echo 'DAQJOBD error ssh to %s failed; %s'; exit 7; }\n"
            "for t in ps jq; do command -v $t >/dev/null || echo \"DAQJOBD warning $t is missing "
-           "(harmless; install on the host: podman exec -u root dunedaq-app dnf install -y -q "
-           "--disablerepo=epel procps-ng jq)\"; done\n"
+           "(%s)\"; done\n" % (CONF["SELF_SSH_HOST"], CONF["SELF_SSH_HOST"], fix_ssh, fix_tools) +
            "mkdir -p %s && daqsystemtest_integtest_bundle.sh %s --concise-output --tmpdir %s"
            % (q(tmpdir), " ".join(opts), q(tmpdir)))
     jid, rc, text = run_job(req, "integtest", cmd, exclusive=True)
@@ -865,6 +980,9 @@ def check_args(name, val, area, repos):
     elif name in ("clone", "checkout"):
         refs = parse_repo_refs(val, name)
         for repo, _ in refs:
+            if MIRROR and not os.path.isdir(os.path.join(MIRROR, repo + ".git")):
+                raise Invalid("%s is not in the mirror %s (firmware repos are skipped; a new GitHub "
+                              "repo appears within the hour)" % (repo, MIRROR))
             if name == "clone" and repo in repos:
                 raise Invalid("%s is already cloned in %s" % (repo, area))
             if name == "checkout" and repo not in repos:
@@ -977,12 +1095,16 @@ def submit(area, steps, requester="", notes="", rid=""):
         subprocess.Popen([sys.executable, "-I", os.path.abspath(__file__), "run-request", rid],
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=err, cwd=WORK,
                          start_new_session=True, close_fds=True)
-    ack = {"id": rid, "status": "accepted",
+    ack = {"id": rid, "status": "accepted", **host_field(),
            "queue": ack_queue(area, any(n == "integtest" for n, _ in plan)),
            "host_path": req["host_path"]}
     if rid != base:
         ack["note"] = "id %s was taken; using %s" % (base, rid)
     return ack
+
+
+def host_field():
+    return {"host": CONF["HOST_LABEL"]} if CONF["HOST_LABEL"] else {}
 
 
 def result(rid, wait_s=0):
@@ -996,7 +1118,7 @@ def result(rid, wait_s=0):
         if st in TERMINAL or time.time() >= deadline:
             break
         time.sleep(2)
-    out = {"id": rid, "status": st, "area": req["area"], "release": req.get("release", ""),
+    out = {"id": rid, "status": st, **host_field(), "area": req["area"], "release": req.get("release", ""),
            "host_path": req["host_path"], "steps": list(req["results"])}
     pending = req["plan"][len(req["results"]):]
     if st in ("queued", "running"):
@@ -1098,14 +1220,16 @@ def list_releases(typ="nightly"):
 def stack_status():
     rc_c, _ = sh("timeout 15 ls /cvmfs/dunedaq.opensciencegrid.org/setup_dunedaq.sh "
                  "/cvmfs/dunedaq-development.opensciencegrid.org/nightly >/dev/null", 20)
-    rc_s, _ = sh("ssh -o BatchMode=yes -o ConnectTimeout=5 dunedaq-app true", 15)
+    rc_s, _ = sh("ssh -o BatchMode=yes -o ConnectTimeout=5 %s true" % CONF["SELF_SSH_HOST"], 15)
     active = [r for r in list_requests(200) if r["status"] in ("queued", "running")]
     return {"cvmfs": "readable" if rc_c == 0 else "NOT readable",
             "sshd": "ok" if rc_s == 0 else "NOT reachable (integtests will fail)",
             "integtest_tools": "ok" if shutil.which("ps") and shutil.which("jq") else "ps/jq missing (harmless)",
             "active_requests": active,
             "running_jobs": running_jobs(),
-            "note": "Machine and container lifecycle is host-side: bin/daq-stack status|ensure|restart-if-idle."}
+            **host_field(),
+            "note": ("Native host: nothing to manage; report CVMFS or ssh problems to the user." if NATIVE else
+                     "Machine and container lifecycle is host-side: bin/daq-stack status|ensure|restart-if-idle.")}
 
 
 def job_log(job="", request="", step=None, lines=60):
@@ -1204,7 +1328,25 @@ INSTRUCTIONS = """DUNE DAQ job service (daq-jobd), running inside the dunedaq-ap
   The /dunedaq:dunedaq-env-client skill has the full list."""
 
 
+NATIVE_INSTRUCTIONS = """DUNE DAQ job service (daq-jobd), running natively on {H} (no container).
+- Paths in results are on {H}: read logs with daq_log, not from your own disk.
+- Code reaches {H} through git only. Commit in your own work area, push the branch to the
+  `daqfnal` remote (add it with `bin/daq-jobd remote-add <area or repo dir>` in dunedaq-container),
+  then request clone/checkout of that branch or commit. Pushing to daqfnal needs no approval;
+  pushing anywhere else does. Branches you pushed win over GitHub branches of the same name.
+- GitHub branches and tags come from a mirror updated hourly. A repo missing from it is
+  either a *-firmware repo (skipped) or new on GitHub.
+- One job per area, {S} in total, integtests alone: requests queue rather than fail. It is a
+  shared machine: don't raise -j above the default without a reason.
+- Nothing is pushed from {H}. Deleting or recreating a work area: ask the user.
+- Wait for long requests in the background with
+  `ssh {H} daq-jobd/dunedaq-container/bin/daq-jobd --conf daq-jobd/daq-jobd.conf wait <id>`.
+- On a failed step, hand the log (via daq_log) to the daq-log-triage agent rather than reading big logs."""
+
+
 def instructions():
+    if NATIVE:
+        return NATIVE_INSTRUCTIONS.replace("{H}", CONF["HOST_LABEL"] or "this host").replace("{S}", str(MAX_SLOTS))
     # The container repo is the parent of the host directory mounted at /work.
     return INSTRUCTIONS.replace("{C}", os.path.dirname(HOST_WORK) if HOST_WORK else "<dunedaq-container>")
 
@@ -1310,6 +1452,18 @@ def main(argv):
         print(json.dumps(result(argv[2], float(argv[3]) if len(argv) == 4 else 0), indent=1))
     elif cmd == "cancel" and len(argv) == 3:
         print(json.dumps(cancel(argv[2]), indent=1))
+    elif cmd == "wait" and len(argv) in (3, 4):
+        every = float(argv[3]) if len(argv) == 4 else 15
+        while True:
+            try:
+                st = req_status(load_req(argv[2]))
+            except (OSError, ValueError):
+                print("no request %s" % argv[2], file=sys.stderr)
+                return 2
+            if st in TERMINAL:
+                print("REQUEST-ENDED %s %s" % (st, argv[2]))
+                return 0
+            time.sleep(every)
     elif cmd == "list":
         print(json.dumps({"requests": list_requests(), "jobs": list_jobs()}, indent=1))
     else:

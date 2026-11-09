@@ -1,14 +1,24 @@
 #!/usr/bin/env bash
 # bin/daq-jobd
 # Host side of the daq-jobd job service (jobd/daq_jobd.py), which runs inside
-# dunedaq-app. Clients talk to it over MCP; see jobd/README.md.
+# dunedaq-app, or natively on a Linux host (--conf). Clients talk to it over MCP;
+# see jobd/README.md.
 #
-# Usage:
+# Usage (container, on the Mac):
 #   bin/daq-jobd mcp              MCP server on stdin/stdout (what .mcp.json runs)
 #   bin/daq-jobd wait ID [SECS]   block until request ID ends, polling its state file on
 #                                 the host every SECS (default 15); prints
 #                                 "REQUEST-ENDED <status> <id>". For Monitor/background use.
 #   bin/daq-jobd submit|result|list|cancel ...   the daq_jobd.py command line, in the container
+#
+# Native host (run there, e.g. over ssh): the service runs directly, with its settings
+# from CONF (see jobd/native.conf.example):
+#   bin/daq-jobd --conf CONF mcp|submit|result|list|cancel|wait ...
+#
+# Your own machine, for native hosts:
+#   bin/daq-jobd remote-add [--base URL] DIR...   add a `daqfnal` git remote to each repo
+#       in DIR (a repo, or a work area: its sourcecode/* and pythoncode/*), pointing at
+#       URL/<repo>.git. URL defaults to $DAQFNAL_BASE, else daq.fnal.gov:dunedaq_repos_mirror.
 #
 # Every start copies jobd/daq_jobd.py to work/.daq-jobd/ (the container sees only
 # /work) and reaps locks left by dead host-side bin/daq-job runners, which the
@@ -70,9 +80,40 @@ cmd_wait() {
   done
 }
 
+cmd_remote_add() {
+  local base="${DAQFNAL_BASE:-daq.fnal.gov:dunedaq_repos_mirror}" dir repo url have
+  if [ "${1:-}" = --base ]; then base=$2; shift 2; fi
+  [ $# -gt 0 ] || die "remote-add: give a repo or work area directory"
+  for dir in "$@"; do
+    if [ -d "$dir/.git" ]; then set -- "$dir"
+    else set -- "$dir"/sourcecode/*/ "$dir"/pythoncode/*/; fi
+    for repo in "$@"; do
+      repo=${repo%/}
+      [ -d "$repo/.git" ] || continue
+      url="$base/$(basename "$repo").git"
+      if have=$(git -C "$repo" remote get-url daqfnal 2>/dev/null); then
+        [ "$have" = "$url" ] && echo "ok       $repo" || echo "SKIP     $repo: daqfnal is already $have" >&2
+      else
+        git -C "$repo" remote add daqfnal "$url" && echo "added    $repo -> $url"
+      fi
+    done
+  done
+}
+
+if [ "${1:-}" = --conf ]; then
+  conf=${2:?--conf needs a file}; shift 2
+  [ -f "$conf" ] || die "no config file $conf"
+  export DAQ_JOBD_CONF="$(cd "$(dirname "$conf")" && pwd)/$(basename "$conf")"
+  case "${1:-}" in
+    mcp|submit|result|list|cancel|wait) exec python3 -I "$ROOT/jobd/daq_jobd.py" "$@" ;;
+    *) sed -n '2,28p' "$0"; exit 2 ;;
+  esac
+fi
+
 sub=${1:-}; shift || true
 case "$sub" in
   wait) cmd_wait "$@" ;;
+  remote-add) cmd_remote_add "$@" ;;
   mcp|submit|result|list|cancel)
     running || die "container $CONTAINER is not running; run bin/daq-stack ensure" 3
     hw=$(host_work); [ -n "$hw" ] || die "cannot find the host directory mounted at /work" 3
@@ -81,5 +122,5 @@ case "$sub" in
     if [ "$sub" = mcp ]; then in_container "$hw" -i -- mcp
     else in_container "$hw" -- "$sub" "$@"; fi
     ;;
-  *) sed -n '2,18p' "$0"; exit 2 ;;
+  *) sed -n '2,28p' "$0"; exit 2 ;;
 esac

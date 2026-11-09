@@ -1,0 +1,25 @@
+# daq-jobd settings for a native host: Alma 9 x86_64 with /cvmfs/dunedaq*.
+# Copy to ~/daq-jobd/daq-jobd.conf on the host and adjust. Clients run
+#   ssh <host> daq-jobd/dunedaq-container/bin/daq-jobd --conf daq-jobd/daq-jobd.conf mcp
+# Settings not given keep the container defaults (see CONF in jobd/daq_jobd.py).
+
+MODE=native
+HOST_LABEL=daq.fnal.gov
+WORK=~/daq-jobd/work
+JOBS=~/daq-jobd/jobs
+
+# A shared machine: two jobs at a time, 16 build jobs each unless a request asks otherwise.
+MAX_SLOTS=2
+DEFAULT_JOBS=16
+
+SETUP_ROOT=cd {work} && source /cvmfs/dunedaq.opensciencegrid.org/setup_dunedaq.sh && setup_dbt latest
+SETUP_AREA=cd {work}/{area} && source ./env.sh
+
+# Repos come from the hourly mirror (jobd/update_mirror.sh), which also holds the
+# branches you push to the `daqfnal` remote. Anonymous HTTPS: no GitHub key on the host.
+MIRROR=~/dunedaq_repos_mirror
+GIT_URL=https://github.com/DUNE-DAQ/{repo}.git
+RECIPE_SSH_REPOS=0
+
+# drunc's ssh process manager connects to the host itself.
+SELF_SSH_HOST=$(hostname)
