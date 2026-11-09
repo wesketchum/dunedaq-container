@@ -821,7 +821,12 @@ def parse_integtest(text):
 
 def step_integtest(req, a):
     label = "integtest-%s" % time.strftime("%H%M%S")
-    tmpdir = os.path.join(WORK, req["area"], "integtest_tmp", "%s-%s" % (req["id"], label))
+    # Some tests size themselves from the free space under the tmpdir (insufficient_disk_space_test),
+    # so tmpdir lets them run on a local disk like CI's /tmp instead of the work area's filesystem.
+    if a.get("tmpdir"):
+        tmpdir = os.path.join(a["tmpdir"], "daq-jobd-%s-%s-%s" % (req["area"], req["id"], label))
+    else:
+        tmpdir = os.path.join(WORK, req["area"], "integtest_tmp", "%s-%s" % (req["id"], label))
     opts = ["-r %s" % q(a.get("repos", "daqsystemtest"))]
     if a.get("include"):
         opts.append("-k %s" % q(a["include"]))
@@ -1033,9 +1038,12 @@ def check_args(name, val, area, repos):
             raise Invalid("format path must start with a repo cloned in %s: %r" % (area, path))
         a = {"path": safe_rel(path, "format path")}
     elif name == "integtest":
-        for k in ("repos", "include", "exclude", "suite", "pytest_options"):
+        for k in ("repos", "include", "exclude", "suite", "pytest_options", "tmpdir"):
             if k in a and not isinstance(a[k], str):
                 raise Invalid("integtest %s is a string" % k)
+        t = a.get("tmpdir")
+        if t and (not t.startswith("/") or ".." in t.split("/") or not re.match(r"^[A-Za-z0-9._/-]+$", t)):
+            raise Invalid("integtest tmpdir must be an absolute path without '..': %r" % t)
     elif name == "recipe-save":
         if isinstance(val, str):
             a = {"name": val}
@@ -1283,8 +1291,9 @@ STEP_DOC = """Steps run in order; the first failure stops the rest. Each is a on
   {"build": {"clean": false, "jobs": 6, "optimize": "O2", "sanitize": "address", "debug": false}}
   {"unittest": "<package>|all"}   {"lint": "<package>|<repo/path/file>|all"}
   {"format": "<repo>[/path]"}     rewrites files in place with dbt-clang-format.sh
-  {"integtest": {"repos": "daqsystemtest", "include": "pattern", "exclude": "pattern", "suite": "core", "pytest_options": "..."}}
-     waits until the whole machine is free
+  {"integtest": {"repos": "daqsystemtest", "include": "pattern", "exclude": "pattern", "suite": "core", "pytest_options": "...", "tmpdir": "/tmp"}}
+     waits until the whole machine is free; tmpdir (default: the area's integtest_tmp/) is the root for
+     pytest output, e.g. /tmp for tests that size themselves from its free space as on CI
   {"recipe-save": {"name": N, "require_valid_refs": false}}
   {"exec": "<shell command run in the area's environment>"}
   "info"   release, local repos and git status

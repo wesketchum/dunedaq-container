@@ -42,7 +42,7 @@ notes: "Testing the new HDF5RawDataFile API before review"
 | `unittest` | package or `all` | `dbt-build --unittest <pkg>` |
 | `lint` | package, file, or `all` | `dbt-build --lint <pkg>` |
 | `format` | repo, or path within it | `dbt-clang-format.sh <path>` (rewrites files in place) |
-| `integtest` | `{repos?, include?, exclude?, suite?, pytest_options?}` | `daqsystemtest_integtest_bundle.sh -r ... -k ... -x ... -s ...`, **exclusive**: waits for the whole machine |
+| `integtest` | `{repos?, include?, exclude?, suite?, pytest_options?, tmpdir?}` | `daqsystemtest_integtest_bundle.sh -r ... -k ... -x ... -s ...`, **exclusive**: waits for the whole machine. `tmpdir` (absolute, e.g. `/tmp`) puts pytest output there instead of the area's `integtest_tmp/` (daq-jobd only) |
 | `recipe-save` | `name`, `require_valid_refs` (bool) | `dbtx-save-workarea-recipe.py [--require-valid-refs] <name>` |
 | `exec` | `cmd` (string) | an arbitrary command in the area's environment, e.g. a script from rawdatautils or `hdf5_dump.py` |
 | `info` | none | `dbt-info release` + `dbt-info sourcecode` + `git status -sb` per repo |
