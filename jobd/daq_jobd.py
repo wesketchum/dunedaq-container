@@ -826,10 +826,10 @@ def step_integtest(req, a):
         fix_ssh = "on the host run bin/daq-stack ensure (loopback sshd, port 2222)"
         fix_tools = ("harmless; install on the host: podman exec -u root dunedaq-app dnf install -y -q "
                      "--disablerepo=epel procps-ng jq")
-    cmd = ("ssh -o BatchMode=yes -o ConnectTimeout=5 %s true || "
-           "{ echo 'DAQJOBD error ssh to %s failed; %s'; exit 7; }\n"
-           "for t in ps jq; do command -v $t >/dev/null || echo \"DAQJOBD warning $t is missing "
-           "(%s)\"; done\n" % (CONF["SELF_SSH_HOST"], CONF["SELF_SSH_HOST"], fix_ssh, fix_tools) +
+    cmd = ("ssh -o BatchMode=yes -o ConnectTimeout=5 %s true || { echo %s; exit 7; }\n"
+           "for t in ps jq; do command -v $t >/dev/null || echo \"DAQJOBD warning $t is missing\" %s; done\n"
+           % (CONF["SELF_SSH_HOST"], q("DAQJOBD error ssh to %s failed; %s" % (CONF["SELF_SSH_HOST"], fix_ssh)),
+              q("(%s)" % fix_tools)) +
            "mkdir -p %s && daqsystemtest_integtest_bundle.sh %s --concise-output --tmpdir %s"
            % (q(tmpdir), " ".join(opts), q(tmpdir)))
     jid, rc, text = run_job(req, "integtest", cmd, exclusive=True)
