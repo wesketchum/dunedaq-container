@@ -6,6 +6,7 @@ Containerized DUNE DAQ development environment for macOS, using Podman.
 - **DUNE DAQ** runs in `ghcr.io/dune-daq/alma9-spack:latest`, with `/cvmfs` mounted read-only from the sidecar
 - Orchestrated with `podman-compose`
 - Your work directory, shell history, and user identity persist across container restarts
+- AI agents build and test through the **daq-jobd** MCP tools: in this container, or natively on daq.fnal.gov for big integration tests (see [Agent-driven workflow](#agent-driven-workflow-claude-code-codex))
 
 ## Prerequisites
 
@@ -88,45 +89,55 @@ Then `./shell.sh` as usual. The containers have `restart: unless-stopped`, so if
 | View logs | `podman-compose logs -f` |
 | Check CVMFS health | `podman ps --format "{{.Names}}\t{{.Status}}"` |
 
-## Agent-driven workflow (Claude Code)
+## Agent-driven workflow (Claude Code, Codex)
 
-One long-lived Claude Code session acts as the **dunedaq-env broker**. It owns the
-container, and other Claude sessions send it requests: create a work area, clone
-repos, build, run unit tests / lint / integration tests.
+Agents build and test through **daq-jobd**, a job service that runs inside the container
+and offers MCP tools: `daq_submit`, `daq_result`, `daq_log`, `daq_list`, `daq_cancel`,
+`daq_areas`, `daq_releases` and `daq_status`. A request is a list of steps (create a work
+area, clone, build, unit tests, lint, integration tests, ...). It runs in the background,
+under shared limits: one job per area, two in total, integtests alone. Design, tools and
+limits are in [`jobd/README.md`](jobd/README.md).
 
-```bash
-cd ~/dunedaq-container && claude --model sonnet      # then: /dunedaq-env
-```
+The `dunedaq` plugin registers the server and the client skill:
+- **Claude Code:** install the [dunedaq-ai-tools](https://github.com/wesketchum/dunedaq-ai-tools)
+  plugin.
+  ```
+  /plugin marketplace add wesketchum/dunedaq-ai-tools
+  /plugin install dunedaq@dunedaq-ai-tools
+  ```
+  `/mcp` should then list `plugin:dunedaq:daq-jobd`.
+- **Codex:** ai_tools' `scripts/install-codex.sh --apply` registers the same server.
 
-Run the broker on Sonnet. Its work is mostly routine message handling and job
-dispatch, so Opus costs more without helping. Set the model at launch (or with
-`/model sonnet` before running `/dunedaq-env`). A `model:` line in the skill's
-frontmatter won't do it, because that override only lasts for the turn the skill
-is invoked in. Every later request message reverts to the session model.
+From any session (e.g. one working in `~/dunedaq/all_repos`), ask it to build or test
+something, or use `/dunedaq:dunedaq-env-client`. Agents edit code directly in
+`work/<area>/sourcecode/` on the host. With no broker in between, they also keep the
+stack healthy themselves (`bin/daq-stack ensure`, `restart-if-idle`), as the skill
+describes. Nothing is pushed from the container: pushes to GitHub are blocked there, and
+publishing is left to you.
 
-From any other session (e.g. one working in `~/dunedaq/all_repos`), use the
-`/dunedaq:dunedaq-env-client` skill, or just ask it to "have dunedaq-env build and unit-test X".
-Peers edit code directly in `work/<area>/sourcecode/` on the host; the broker runs
-everything in the container. It never pushes. Pushes are blocked inside the
-container, and publishing is left to you.
+### On daq.fnal.gov (big integration tests)
+
+The same service runs natively on daq.fnal.gov (Alma 9, 128 CPUs), registered as
+`daq-jobd-fnal`. It's the place for integration tests that need 30 CPUs.
+- Code travels by git. `bin/daq-jobd remote-add <area>` adds a `daqfnal` remote to each repo
+  in a work area. Push a branch to it, then request `clone` or `checkout` of that branch or
+  commit.
+- The host keeps an hourly mirror of the DUNE-DAQ repos.
+- Connecting needs a valid Kerberos ticket.
+
+Layout and setup are in [`jobd/README.md`](jobd/README.md#native-hosts-daqfnalgov).
 
 | Piece | Purpose |
 |---|---|
 | `AGENTS.md` | Instructions for AI agents working in this repo (`CLAUDE.md` just imports it) |
+| `jobd/daq_jobd.py` | The daq-jobd service (MCP server and request runner) |
+| `bin/daq-jobd` | Starts it: `mcp` (container), `--conf <file> mcp` (native host), `wait <id>`, `remote-add` |
+| `jobd/update_mirror.sh`, `jobd/native.conf.example` | Native host: hourly repo mirror and host settings |
 | `bin/daq-exec` | Run a command in the container with the DAQ env set up correctly (handles the Rosetta `SPACK_ROOT` trap) |
-| `bin/daq-job` | Queue/run long jobs: one per work area, ≤2 total, integtests exclusive; state + logs in `work/.daq-jobs/` |
+| `bin/daq-job` | Job queue and locks shared with daq-jobd: one per work area, ≤2 total, integtests exclusive; state and logs in `work/.daq-jobs/` |
 | `bin/daq-stack` | `status` / `ensure` / `restart-if-idle` (refuses if jobs or interactive shells are active) |
-| `.claude/skills/dunedaq-env/` | Broker instructions + `PROTOCOL.md` (message format) |
 | `.claude/agents/daq-log-triage.md` | Read-only subagent that diagnoses failed build/test logs |
-
-The client skill for peer sessions comes from the `dunedaq` Claude Code plugin
-([dunedaq-ai-tools](https://github.com/wesketchum/dunedaq-ai-tools)), which also puts
-`resolve-build-packages` on the `PATH` for the broker:
-
-```
-/plugin marketplace add wesketchum/dunedaq-ai-tools
-/plugin install dunedaq@dunedaq-ai-tools
-```
+| `.claude/skills/dunedaq-env/` | The older broker: a long-lived session (`claude --model sonnet`, then `/dunedaq-env`) that serves `PROTOCOL.md` messages. It still works and shares daq-jobd's queue, but nothing needs it any more |
 
 ## Integration tests and sshd
 
@@ -149,8 +160,10 @@ needs no custom image:
 
 The bundle script's `ps` (numad check) and `jq` (copying failed-test dirs) aren't in the
 image. Both are optional and only produce warnings without them. The container doesn't
-install them at startup. The broker installs them (`dnf`, as root via `podman exec -u root`)
-before its first integtest in a container, and they last until the container is recreated.
+install them at startup. To add them:
+`podman exec -u root dunedaq-app dnf install -y -q --disablerepo=epel procps-ng jq`. They
+last until the container is recreated. daq-jobd's integtest step warns when they're
+missing.
 
 ## Customizing the Podman machine
 

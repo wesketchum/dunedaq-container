@@ -119,8 +119,6 @@ a throwaway area with `DAQ_JOBS_DIR=/work/.daq-jobs-test bin/daq-jobd submit '{.
   (`daq_cancel`, `bin/daq-job cancel`) does kill it.
 - A container restart kills all runners. Their requests show as `lost`, so resubmit.
 - MCP calls block the client while waiting, so use `bin/daq-jobd wait` for long jobs.
-- The integtest step is implemented but has only been checked for argument handling, not
-  run end to end.
 
 ## Native hosts (daq.fnal.gov)
 
