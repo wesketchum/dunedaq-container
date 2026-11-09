@@ -122,10 +122,53 @@ a throwaway area with `DAQ_JOBS_DIR=/work/.daq-jobs-test bin/daq-jobd submit '{.
 - The integtest step is implemented but has only been checked for argument handling, not
   run end to end.
 
-## Next: remote hosts
+## Native hosts (daq.fnal.gov)
 
-The container side does not depend on macOS. On a Linux build host with the same
-`compose.yaml`, a client registers
-`ssh <host> /path/to/dunedaq-container/bin/daq-jobd mcp` as its MCP command. Source
-exchange then has to move to git: push to a bare repo under the remote `work/`, then send
-a `checkout` step. `host_path` editing only works on the machine that holds `work/`.
+The same service runs natively on a Linux host with CVMFS, with no container. On
+daq.fnal.gov (Alma 9, 128 CPUs) that is how the 30-CPU integration tests get run.
+
+**Layout on the host** (all in your home directory, nothing installed system-wide):
+
+```
+~/daq-jobd/dunedaq-container/   clone of this repo; update with git pull
+~/daq-jobd/daq-jobd.conf        host settings, from jobd/native.conf.example
+~/daq-jobd/jobs/                requests, job logs, locks
+~/daq-jobd/work/<area>/         work areas
+~/dunedaq_repos_mirror/<repo>.git   bare mirror of the DUNE-DAQ repos
+```
+
+`daq-jobd.conf` replaces the container defaults:
+- `MODE=native`
+- plain dbt setup commands, with no Rosetta step
+- `MAX_SLOTS=2` and `DEFAULT_JOBS=16` (a shared machine)
+- `MIRROR` for repos
+- `SELF_SSH_HOST=$(hostname)`, since drunc's process manager connects to the host itself
+
+**Code goes through git.**
+- `jobd/update_mirror.sh` keeps the bare mirror. Cron runs it hourly:
+  `17 * * * * $HOME/daq-jobd/dunedaq-container/jobd/update_mirror.sh`.
+- It fetches GitHub's branches into `refs/remotes/origin/*` and its tags, anonymously over
+  HTTPS. It skips archived and `*-firmware` repos.
+- Branches you push go to the mirror's `refs/heads/*`. The hourly update never touches those.
+
+The cycle:
+1. On your own machine, run `bin/daq-jobd remote-add <work area or repo dir>` once. It adds a
+   `daqfnal` remote to each repo there.
+2. Commit, then `git push daqfnal <branch>`.
+3. Ask daq-jobd-fnal for `clone` or `checkout` of `<repo>@<branch>` (or a commit).
+
+`clone` and `checkout` read from the mirror. A ref resolves in this order: a branch you
+pushed, then a GitHub branch, a tag, a commit. The result says which, with the SHA.
+
+**Clients** connect with
+`ssh daq.fnal.gov daq-jobd/dunedaq-container/bin/daq-jobd --conf daq-jobd/daq-jobd.conf mcp`.
+- The `dunedaq` plugin registers it as `daq-jobd-fnal`. It needs a valid Kerberos ticket.
+- Wait for a request with the same command and `wait <id>` in place of `mcp`.
+- Paths in results are on the host, so read logs with `daq_log`.
+
+**Updating the host's copy:** `ssh daq.fnal.gov git -C daq-jobd/dunedaq-container pull --ff-only`.
+The clone has `receive.denyCurrentBranch=updateInstead`, so during development you can also
+push to it directly (`git push <remote> <branch>:main`).
+
+Further hosts follow the same pattern: copy the config, change `HOST_LABEL` and the mirror
+path, and add another MCP entry.
