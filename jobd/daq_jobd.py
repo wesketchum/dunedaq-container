@@ -58,6 +58,9 @@ CONF = {
     "MIRROR": "",                 # bare mirror (jobd/update_mirror.sh); clone/checkout use it
     "RECIPE_SSH_REPOS": "1",      # dbtx-create-workarea-from-recipe.py --use-ssh-repos
     "SELF_SSH_HOST": "dunedaq-app",  # what drunc's ssh process manager connects to
+    # all: an integtest takes every slot (the Mac VM is too small to share with it).
+    # integtest: one integtest at a time, other jobs run alongside within MAX_SLOTS.
+    "INTEGTEST_EXCLUSIVE": "all",
 }
 
 
@@ -92,6 +95,9 @@ REQS = os.path.join(JOBS, "requests")
 HOST_WORK = os.environ.get("DAQ_HOST_WORK", "")
 MAX_SLOTS = int(CONF["MAX_SLOTS"])
 MIRROR = _path(CONF["MIRROR"])
+if CONF["INTEGTEST_EXCLUSIVE"] not in ("all", "integtest"):
+    raise SystemExit("daq-jobd: INTEGTEST_EXCLUSIVE is all or integtest")
+EXCLUSIVE_ALL = CONF["INTEGTEST_EXCLUSIVE"] == "all"
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 REF_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._/+-]*$")
@@ -285,6 +291,12 @@ def release_all():
 def acquire(jid, area, exclusive):
     if area and not try_lock("area-" + area, jid):
         return False
+    if exclusive and not EXCLUSIVE_ALL:
+        # Only one integtest at a time; it then needs a single slot like any job.
+        if not try_lock("integtest", jid):
+            release_all()
+            return False
+        exclusive = False
     got = 0
     for i in range(1, MAX_SLOTS + 1):
         if try_lock("slot-%d" % i, jid):
@@ -1058,9 +1070,11 @@ def validate(area, steps):
 
 
 def ack_queue(area, exclusive):
-    if exclusive:
+    if exclusive and EXCLUSIVE_ALL:
         busy = any(os.path.isdir(os.path.join(LOCKS, "slot-%d" % i)) for i in range(1, MAX_SLOTS + 1))
         return "waiting for the whole machine (integtest)" if busy else "running"
+    if exclusive and os.path.isdir(os.path.join(LOCKS, "integtest")):
+        return "waiting for another integtest"
     if os.path.isdir(os.path.join(LOCKS, "area-" + area)):
         return "waiting for area lock"
     if all(os.path.isdir(os.path.join(LOCKS, "slot-%d" % i)) for i in range(1, MAX_SLOTS + 1)):
@@ -1336,7 +1350,8 @@ NATIVE_INSTRUCTIONS = """DUNE DAQ job service (daq-jobd), running natively on {H
   pushing anywhere else does. Branches you pushed win over GitHub branches of the same name.
 - GitHub branches and tags come from a mirror updated hourly. A repo missing from it is
   either a *-firmware repo (skipped) or new on GitHub.
-- One job per area, {S} in total, integtests alone: requests queue rather than fail. It is a
+- One job per area, {S} in total, one integtest at a time (other jobs run alongside it):
+  requests queue rather than fail. It is a
   shared machine: don't raise -j above the default without a reason.
 - Nothing is pushed from {H}. Deleting or recreating a work area: ask the user.
 - Wait for long requests in the background with

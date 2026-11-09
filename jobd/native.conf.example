@@ -8,8 +8,10 @@ HOST_LABEL=daq.fnal.gov
 WORK=~/daq-jobd/work
 JOBS=~/daq-jobd/jobs
 
-# A shared machine: two jobs at a time, 16 build jobs each unless a request asks otherwise.
-MAX_SLOTS=2
+# A shared machine: three jobs at a time, 16 build jobs each unless a request asks
+# otherwise. One integtest at a time, with other jobs alongside it (128 CPUs is plenty).
+MAX_SLOTS=3
+INTEGTEST_EXCLUSIVE=integtest
 DEFAULT_JOBS=16
 
 SETUP_ROOT=cd {work} && source /cvmfs/dunedaq.opensciencegrid.org/setup_dunedaq.sh && setup_dbt latest

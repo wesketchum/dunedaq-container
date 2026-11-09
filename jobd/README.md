@@ -138,7 +138,9 @@ daq.fnal.gov (Alma 9, 128 CPUs) that is how the 30-CPU integration tests get run
 `daq-jobd.conf` replaces the container defaults:
 - `MODE=native`
 - plain dbt setup commands, with no Rosetta step
-- `MAX_SLOTS=2` and `DEFAULT_JOBS=16` (a shared machine)
+- `MAX_SLOTS=3` and `DEFAULT_JOBS=16` (a shared machine)
+- `INTEGTEST_EXCLUSIVE=integtest`: one integtest at a time, but other jobs keep running
+  alongside it. In the container (`all`, the default) an integtest takes the whole machine
 - `MIRROR` for repos
 - `SELF_SSH_HOST=$(hostname)`, since drunc's process manager connects to the host itself
 
