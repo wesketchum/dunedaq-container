@@ -14,6 +14,8 @@ jobs in total, integration tests alone.
   daq_jobd.py result ID [WAIT_S]   print a request's result, optionally waiting for it
   daq_jobd.py list | cancel ID     recent requests / cancel one
   daq_jobd.py wait ID [SECS]       block until request ID ends; prints REQUEST-ENDED <status> <id>
+  daq_jobd.py snapshot [HOURS [LOG_LINES]]   JSON for the monitor (bin/daq-jobd top): active
+                                   and queued requests with log tails, slots, health, history
   daq_jobd.py run-request ID       the detached runner (internal)
 
 Host settings (work root, environment setup, slots, git mirror, ...) default to the
@@ -1239,19 +1241,142 @@ def list_releases(typ="nightly"):
     return {"type": typ, "exit": rc, "output": tail(after_begin(text), 60)}
 
 
-def stack_status():
+def env_checks():
     rc_c, _ = sh("timeout 15 ls /cvmfs/dunedaq.opensciencegrid.org/setup_dunedaq.sh "
                  "/cvmfs/dunedaq-development.opensciencegrid.org/nightly >/dev/null", 20)
     rc_s, _ = sh("ssh -o BatchMode=yes -o ConnectTimeout=5 %s true" % CONF["SELF_SSH_HOST"], 15)
-    active = [r for r in list_requests(200) if r["status"] in ("queued", "running")]
     return {"cvmfs": "readable" if rc_c == 0 else "NOT readable",
             "sshd": "ok" if rc_s == 0 else "NOT reachable (integtests will fail)",
-            "integtest_tools": "ok" if shutil.which("ps") and shutil.which("jq") else "ps/jq missing (harmless)",
+            "integtest_tools": "ok" if shutil.which("ps") and shutil.which("jq") else "ps/jq missing (harmless)"}
+
+
+def stack_status():
+    active = [r for r in list_requests(200) if r["status"] in ("queued", "running")]
+    return {**env_checks(),
             "active_requests": active,
             "running_jobs": running_jobs(),
             **host_field(),
             "note": ("Native host: nothing to manage; report CVMFS or ssh problems to the user." if NATIVE else
                      "Machine and container lifecycle is host-side: bin/daq-stack status|ensure|restart-if-idle.")}
+
+
+# ── monitor snapshot (bin/daq-jobd top) ───────────────────────────────────────
+
+def ts_of(stamp):
+    try:
+        return time.mktime(time.strptime(stamp, "%Y-%m-%dT%H:%M:%S"))
+    except (ValueError, TypeError):
+        return 0
+
+
+def lock_owner(name):
+    d = os.path.join(LOCKS, name)
+    return read(os.path.join(d, "owner"), "?") if os.path.isdir(d) else None
+
+
+def file_tail(path, n, size=16384):
+    """Last n non-blank lines, ANSI stripped; a \\r-redrawn progress line keeps its last state."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(max(0, os.fstat(f.fileno()).st_size - size))
+            text = f.read().decode(errors="replace")
+    except OSError:
+        return []
+    lines = [strip_ansi(ln).rstrip("\r").split("\r")[-1].rstrip() for ln in text.split("\n")]
+    return [ln for ln in lines if ln.strip()][-n:]
+
+
+def cached_env_checks(max_age=60):
+    """env_checks() takes seconds (ssh, CVMFS), so a monitor polling every few seconds
+    shares one result per minute through a cache file."""
+    path = os.path.join(JOBS, ".monitor-health.json")
+    try:
+        if time.time() - os.stat(path).st_mtime < max_age:
+            with open(path) as f:
+                return json.load(f)
+    except (OSError, ValueError):
+        pass
+    out = env_checks()
+    try:
+        write(path, json.dumps(out))
+    except OSError:
+        pass
+    return out
+
+
+def mirror_state():
+    log = os.path.join(MIRROR, "update.log")
+    try:
+        age = time.time() - os.stat(log).st_mtime
+    except OSError:
+        return {"summary": "no update.log yet"}
+    last = next((ln for ln in reversed(file_tail(log, 20)) if ln.startswith(("updated ", "warning"))), "")
+    return {"age_s": int(age), "summary": last}
+
+
+def snapshot(hours=24, log_lines=4, recent_max=10):
+    """Everything bin/daq-jobd top shows for this host, in one read-only call."""
+    t = time.time()
+    active, recent, current = [], [], set()
+    for rid in request_ids():
+        try:
+            req = load_req(rid)
+        except (OSError, ValueError):
+            continue
+        st = req_status(req)
+        plan, res = req.get("plan", []), req.get("results", [])
+        created = req.get("created_ts", 0)
+        if st in ("queued", "running"):
+            step = plan[len(res)][0] if len(res) < len(plan) else ""
+            item = {"id": rid, "status": st, "area": req["area"], "from": req.get("from", ""),
+                    "elapsed_s": int(t - created), "step": step, "step_no": len(res) + 1,
+                    "steps": len(plan), "done": [[r["step"], r["status"]] for r in res]}
+            jid = req.get("current_job")
+            if jid:
+                current.add(jid)
+                d = os.path.join(JOBS, jid)
+                item["job"] = jid
+                item["job_state"] = js = job_state(jid)
+                if js == "running":
+                    item["step_elapsed_s"] = int(t - ts_of(read(os.path.join(d, "started"))))
+                    item["log_tail"] = file_tail(os.path.join(d, "log"), log_lines)
+                elif js == "queued":
+                    why = ack_queue(req["area"], step == "integtest")
+                    item["waiting"] = "starting" if why == "running" else why
+            else:
+                item["waiting"] = "runner starting"
+            active.append((created, item))
+        elif t - created < hours * 3600:
+            fin = ts_of(req.get("finished"))
+            item = {"id": rid, "status": st, "area": req["area"], "from": req.get("from", ""),
+                    "finished": req.get("finished", ""), "duration_s": int(fin - created) if fin else None,
+                    "steps": [[r["step"], r["status"], r.get("duration", "")] for r in res]}
+            if req.get("failure"):
+                item["first_error"] = req["failure"].get("first_error", "")
+            recent.append((created, item))
+    host_jobs = []
+    for j in job_ids()[-100:]:
+        d = os.path.join(JOBS, j)
+        if j in current or read(os.path.join(d, "ctr_runner")):
+            continue
+        s = read(os.path.join(d, "state"))
+        if s in ("queued", "running"):
+            host_jobs.append({"id": j, "state": s, "area": read(os.path.join(d, "area")),
+                              "label": read(os.path.join(d, "label")),
+                              "requester": read(os.path.join(d, "requester"))})
+    out = {"host": CONF["HOST_LABEL"] or "container", "mode": CONF["MODE"], "version": VERSION,
+           "time": now(), "max_slots": MAX_SLOTS,
+           "slots": [lock_owner("slot-%d" % i) for i in range(1, MAX_SLOTS + 1)],
+           "integtest_exclusive": CONF["INTEGTEST_EXCLUSIVE"],
+           "active": [i for _, i in sorted(active, key=lambda p: p[0])],
+           "host_jobs": host_jobs,
+           "recent": [i for _, i in sorted(recent, key=lambda p: p[0])][-recent_max:][::-1],
+           "health": cached_env_checks()}
+    if not EXCLUSIVE_ALL:
+        out["integtest_lock"] = lock_owner("integtest")
+    if MIRROR:
+        out["health"]["mirror"] = mirror_state()
+    return out
 
 
 def job_log(job="", request="", step=None, lines=60):
@@ -1490,6 +1615,9 @@ def main(argv):
             time.sleep(every)
     elif cmd == "list":
         print(json.dumps({"requests": list_requests(), "jobs": list_jobs()}, indent=1))
+    elif cmd == "snapshot" and len(argv) in (2, 3, 4):
+        print(json.dumps(snapshot(float(argv[2]) if len(argv) > 2 else 24,
+                                  int(argv[3]) if len(argv) > 3 else 4)))
     else:
         sys.stderr.write(__doc__)
         return 2

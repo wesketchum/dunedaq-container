@@ -116,6 +116,14 @@ def main(area):
     lst, _ = c.tool("daq_list", limit=5)
     check("list shows the running request", any(x["id"] == long_r["id"] and x["status"] == "running"
                                                 for x in lst["requests"]), lst["requests"])
+    snap = json.loads(subprocess.check_output([os.path.join(ROOT, "bin", "daq-jobd"), "snapshot"],
+                                              env=dict(os.environ, DAQ_JOBS_DIR="/work/.daq-jobs-test")))
+    act = {a["id"]: a for a in snap["active"]}
+    check("snapshot: running request with its step", act.get(long_r["id"], {}).get("job_state") == "running"
+          and "step_elapsed_s" in act[long_r["id"]], snap["active"])
+    check("snapshot: queued request says why", "area lock" in act.get(queued_r["id"], {}).get("waiting", ""),
+          snap["active"])
+    check("snapshot: a slot is held", any(snap["slots"]), snap["slots"])
     can, _ = c.tool("daq_cancel", id=long_r["id"])
     check("cancel accepted", can.get("status") == "cancelling", can)
     cur, _ = c.tool("daq_result", id=long_r["id"], wait_s=30)

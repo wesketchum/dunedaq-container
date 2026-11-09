@@ -112,7 +112,8 @@ From any session (e.g. one working in `~/dunedaq/all_repos`), ask it to build or
 something, or use `/dunedaq:dunedaq-env-client`. Agents edit code directly in
 `work/<area>/sourcecode/` on the host. With no broker in between, they also keep the
 stack healthy themselves (`bin/daq-stack ensure`, `restart-if-idle`), as the skill
-describes. Nothing is pushed from the container: pushes to GitHub are blocked there, and
+describes. To watch what they are running, here and on daq.fnal.gov, use `bin/daq-jobd top`.
+Nothing is pushed from the container: pushes to GitHub are blocked there, and
 publishing is left to you.
 
 ### On daq.fnal.gov (big integration tests)
@@ -131,7 +132,7 @@ Layout and setup are in [`jobd/README.md`](jobd/README.md#native-hosts-daqfnalgo
 |---|---|
 | `AGENTS.md` | Instructions for AI agents working in this repo (`CLAUDE.md` just imports it) |
 | `jobd/daq_jobd.py` | The daq-jobd service (MCP server and request runner) |
-| `bin/daq-jobd` | Starts it: `mcp` (container), `--conf <file> mcp` (native host), `wait <id>`, `remote-add` |
+| `bin/daq-jobd` | Starts it: `mcp` (container), `--conf <file> mcp` (native host), `wait <id>`, `remote-add`; `top` monitors both instances (`jobd/monitor.py`) |
 | `jobd/update_mirror.sh`, `jobd/native.conf.example` | Native host: hourly repo mirror and host settings |
 | `bin/daq-exec` | Run a command in the container with the DAQ env set up correctly (handles the Rosetta `SPACK_ROOT` trap) |
 | `bin/daq-job` | Job queue and locks shared with daq-jobd: one per work area, ≤2 total, integtests exclusive; state and logs in `work/.daq-jobs/` |

@@ -88,6 +88,31 @@ The usual pattern:
 Nothing is pushed: git in the container has `pushInsteadOf` set to an invalid URL.
 Deleting or recreating an area is not offered at all.
 
+## Watching the queue
+
+```bash
+bin/daq-jobd top                  # both instances, redrawn every 5 s; Ctrl-C quits
+bin/daq-jobd top --hosts fnal --interval 10 --lines 8
+bin/daq-jobd top --once           # one frame, e.g. to paste somewhere
+```
+
+For each instance it shows:
+- the slots in use, and the integtest lock on a native host
+- health: CVMFS, sshd, missing `ps`/`jq`, and the mirror's last update
+- active requests with their current step, how long it has run, and the last lines of its log
+- queued requests and what they wait for
+- broker jobs
+- the requests that finished in the last 24 h, with the first error of each failure
+
+It only reads. Cancelling stays with `daq_cancel` or `bin/daq-jobd cancel`.
+
+Under it, `daq_jobd.py snapshot` returns all of that as one JSON document. `top` runs it with
+`bin/daq-jobd snapshot` locally and over ssh on `$DAQFNAL_HOST` (default daq.fnal.gov), so
+the native host needs a Kerberos ticket and a checkout that has the command. The ssh
+connection is reused between polls (`~/.ssh/cm-daqjobd-*`). The CVMFS and sshd checks are
+cached for a minute in `jobs/.monitor-health.json`, so polling stays cheap.
+`top --json` prints the raw snapshots.
+
 ## Running alongside the broker
 
 Both can run at once because they share the jobs and locks. The broker keeps what still

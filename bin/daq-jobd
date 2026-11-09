@@ -9,11 +9,14 @@
 #   bin/daq-jobd wait ID [SECS]   block until request ID ends, polling its state file on
 #                                 the host every SECS (default 15); prints
 #                                 "REQUEST-ENDED <status> <id>". For Monitor/background use.
-#   bin/daq-jobd submit|result|list|cancel ...   the daq_jobd.py command line, in the container
+#   bin/daq-jobd submit|result|list|cancel|snapshot ...   the daq_jobd.py command line, in the container
+#   bin/daq-jobd top [--interval S] [--hosts local,fnal] [--once] [--json]
+#                                 read-only monitor of this container and the native host
+#                                 ($DAQFNAL_HOST, default daq.fnal.gov); see jobd/monitor.py
 #
 # Native host (run there, e.g. over ssh): the service runs directly, with its settings
 # from CONF (see jobd/native.conf.example):
-#   bin/daq-jobd --conf CONF mcp|submit|result|list|cancel|wait ...
+#   bin/daq-jobd --conf CONF mcp|submit|result|list|cancel|wait|snapshot ...
 #
 # Your own machine, for native hosts:
 #   bin/daq-jobd remote-add [--base URL] DIR...   add a `daqfnal` git remote to each repo
@@ -105,8 +108,8 @@ if [ "${1:-}" = --conf ]; then
   [ -f "$conf" ] || die "no config file $conf"
   export DAQ_JOBD_CONF="$(cd "$(dirname "$conf")" && pwd)/$(basename "$conf")"
   case "${1:-}" in
-    mcp|submit|result|list|cancel|wait) exec python3 -I "$ROOT/jobd/daq_jobd.py" "$@" ;;
-    *) sed -n '2,28p' "$0"; exit 2 ;;
+    mcp|submit|result|list|cancel|wait|snapshot) exec python3 -I "$ROOT/jobd/daq_jobd.py" "$@" ;;
+    *) sed -n '2,31p' "$0"; exit 2 ;;
   esac
 fi
 
@@ -114,13 +117,16 @@ sub=${1:-}; shift || true
 case "$sub" in
   wait) cmd_wait "$@" ;;
   remote-add) cmd_remote_add "$@" ;;
-  mcp|submit|result|list|cancel)
+  top) exec python3 -I "$ROOT/jobd/monitor.py" "$@" ;;
+  mcp|submit|result|list|cancel|snapshot)
     running || die "container $CONTAINER is not running; run bin/daq-stack ensure" 3
     hw=$(host_work); [ -n "$hw" ] || die "cannot find the host directory mounted at /work" 3
     install_service "$hw"
-    DAQ_JOBS_HOST_DIR="$hw${JOBS_CTR#/work}" "$HERE/daq-job" reap >/dev/null 2>&1 || true
+    # snapshot only reads, and the monitor calls it every few seconds: skip the reap.
+    [ "$sub" = snapshot ] ||
+      DAQ_JOBS_HOST_DIR="$hw${JOBS_CTR#/work}" "$HERE/daq-job" reap >/dev/null 2>&1 || true
     if [ "$sub" = mcp ]; then in_container "$hw" -i -- mcp
     else in_container "$hw" -- "$sub" "$@"; fi
     ;;
-  *) sed -n '2,28p' "$0"; exit 2 ;;
+  *) sed -n '2,31p' "$0"; exit 2 ;;
 esac
