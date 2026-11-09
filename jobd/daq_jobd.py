@@ -1069,7 +1069,7 @@ def ack_queue(area, exclusive):
 
 
 def submit(area, steps, requester="", notes="", rid=""):
-    for d in (JOBS, LOCKS, REQS):
+    for d in (WORK, JOBS, LOCKS, REQS):
         os.makedirs(d, exist_ok=True)
     try:
         if rid and not NAME_RE.match(rid):
@@ -1416,7 +1416,7 @@ def reap_children():
 
 
 def serve():
-    for d in (JOBS, LOCKS, REQS):
+    for d in (WORK, JOBS, LOCKS, REQS):
         os.makedirs(d, exist_ok=True)
     for raw in sys.stdin.buffer:
         reap_children()
