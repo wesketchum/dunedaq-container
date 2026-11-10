@@ -16,6 +16,7 @@ any Python 3.9+, standard library only.
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -121,7 +122,10 @@ class Screen:
 
 
 def short_job(jid):
-    return jid.split("-r", 1)[-1] if jid else "free"
+    """<stamp>-<request>-<step>-c<pid> (daq_jobd.py new_job_dir) -> <request>-<step>."""
+    if not jid:
+        return "free"
+    return re.sub(r"^\d{8}-\d{6}-|-c\d+[a-z]?$", "", jid)
 
 
 def health_line(snap):
