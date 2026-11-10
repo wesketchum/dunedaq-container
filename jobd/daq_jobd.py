@@ -58,6 +58,7 @@ CONF = {
     "SETUP_AREA": "cd {work}/{area} && spackroot && source ./env.sh && _dbt_export_spack_fns",
     "GIT_URL": "git@github.com:DUNE-DAQ/{repo}.git",
     "MIRROR": "",                 # bare mirror (jobd/update_mirror.sh); clone/checkout use it
+    "PUSH_REMOTE": "daqfnal",     # clients' git remote for MIRROR; work clones use the same name
     "RECIPE_SSH_REPOS": "1",      # dbtx-create-workarea-from-recipe.py --use-ssh-repos
     "SELF_SSH_HOST": "dunedaq-app",  # what drunc's ssh process manager connects to
     # all: an integtest takes every slot (the Mac VM is too small to share with it).
@@ -459,7 +460,8 @@ def run_job(req, label, cmd, env="area", exclusive=False):
         with open(log, "ab") as out:
             CHILD = subprocess.Popen(["bash", "-lc", script], stdin=subprocess.DEVNULL,
                                      stdout=out, stderr=subprocess.STDOUT, cwd=WORK,
-                                     env=dict(os.environ, DAQJOBD_MIRROR=MIRROR, **GIT_ENV),
+                                     env=dict(os.environ, DAQJOBD_MIRROR=MIRROR,
+                                             DAQJOBD_REMOTE=CONF["PUSH_REMOTE"], **GIT_ENV),
                                      start_new_session=True)
             write(os.path.join(d, "container_pgid"), str(CHILD.pid))
             rc = CHILD.wait()
@@ -584,20 +586,21 @@ def step_recipe_create(req, a):
     return step_result("recipe-create", jid, rc, text, detail=req.get("release", ""))
 
 
-# Shell helpers for clone/checkout from MIRROR. In a work clone, `daqfnal/*` are the
+# Shell helpers for clone/checkout from MIRROR. In a work clone, `$PUSH_REMOTE/*` are the
 # branches pushed to the mirror from your own machine and `origin/*` are GitHub's
 # (as of the mirror's last hourly update). A ref resolves to a pushed branch first,
 # then a GitHub branch, a tag, a commit. Branches get a local branch tracking their
 # source; that refuses to drop commits made locally on the host.
 MIRROR_SH = r'''
 daqjobd_fetch() {  # DIR REPO
-  git -C "$1" remote get-url daqfnal >/dev/null 2>&1 || git -C "$1" remote add daqfnal "$DAQJOBD_MIRROR/$2.git"
-  git -C "$1" fetch -q --prune daqfnal &&
+  git -C "$1" remote get-url "$DAQJOBD_REMOTE" >/dev/null 2>&1 ||
+    git -C "$1" remote add "$DAQJOBD_REMOTE" "$DAQJOBD_MIRROR/$2.git"
+  git -C "$1" fetch -q --prune "$DAQJOBD_REMOTE" &&
     git -C "$1" fetch -q --prune "$DAQJOBD_MIRROR/$2.git" '+refs/remotes/origin/*:refs/remotes/origin/*' '+refs/tags/*:refs/tags/*'
 }
 daqjobd_resolve() {  # DIR REF -> checks it out, prints the source
   local d=$1 ref=$2 src=
-  if git -C "$d" show-ref -q --verify "refs/remotes/daqfnal/$ref"; then src=daqfnal/$ref
+  if git -C "$d" show-ref -q --verify "refs/remotes/$DAQJOBD_REMOTE/$ref"; then src=$DAQJOBD_REMOTE/$ref
   elif git -C "$d" show-ref -q --verify "refs/remotes/origin/$ref"; then src=origin/$ref
   elif git -C "$d" show-ref -q --verify "refs/tags/$ref"; then
     git -C "$d" checkout -q --detach "refs/tags/$ref" && echo "tag $ref"; return
@@ -1479,23 +1482,31 @@ INSTRUCTIONS = """DUNE DAQ job service (daq-jobd), running inside the dunedaq-ap
 NATIVE_INSTRUCTIONS = """DUNE DAQ job service (daq-jobd), running natively on {H} (no container).
 - Paths in results are on {H}: read logs with daq_log, not from your own disk.
 - Code reaches {H} through git only. Commit in your own work area, push the branch to the
-  `daqfnal` remote (add it with `bin/daq-jobd remote-add <area or repo dir>` in dunedaq-container),
-  then request clone/checkout of that branch or commit. Pushing to daqfnal needs no approval;
+  `{R}` remote (add it with `bin/daq-jobd remote-add {RA}<area or repo dir>` in dunedaq-container),
+  then request clone/checkout of that branch or commit. Pushing to {R} needs no approval;
   pushing anywhere else does. Branches you pushed win over GitHub branches of the same name.
 - GitHub branches and tags come from a mirror updated hourly. A repo missing from it is
   either a *-firmware repo (skipped) or new on GitHub.
-- One job per area, {S} in total, one integtest at a time (other jobs run alongside it):
-  requests queue rather than fail. It is a
+- One job per area, {S} in total, {I}: requests queue rather than fail. It is a
   shared machine: don't raise -j above the default without a reason.
 - Nothing is pushed from {H}. Deleting or recreating a work area: ask the user.
 - Wait for long requests in the background with
-  `ssh {H} daq-jobd/dunedaq-container/bin/daq-jobd --conf daq-jobd/daq-jobd.conf wait <id>`.
+  `ssh {H} {W} wait <id>`.
 - On a failed step, hand the log (via daq_log) to the daq-log-triage agent rather than reading big logs."""
 
 
 def instructions():
     if NATIVE:
-        return NATIVE_INSTRUCTIONS.replace("{H}", CONF["HOST_LABEL"] or "this host").replace("{S}", str(MAX_SLOTS))
+        checkout = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        sub = {"{H}": CONF["HOST_LABEL"] or "this host", "{S}": str(MAX_SLOTS), "{R}": CONF["PUSH_REMOTE"],
+               "{RA}": "" if CONF["PUSH_REMOTE"] == "daqfnal" else "--host %s " % CONF["PUSH_REMOTE"],
+               "{I}": "an integtest takes the whole machine" if EXCLUSIVE_ALL else
+                      "one integtest at a time (other jobs run alongside it)",
+               "{W}": "%s/bin/daq-jobd --conf %s" % (checkout, os.environ.get("DAQ_JOBD_CONF", "<conf>"))}
+        text = NATIVE_INSTRUCTIONS
+        for k, v in sub.items():
+            text = text.replace(k, v)
+        return text
     # The container repo is the parent of the host directory mounted at /work.
     return INSTRUCTIONS.replace("{C}", os.path.dirname(HOST_WORK) if HOST_WORK else "<dunedaq-container>")
 

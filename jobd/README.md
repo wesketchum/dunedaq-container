@@ -167,7 +167,8 @@ daq.fnal.gov (Alma 9, 128 CPUs) that is how the 30-CPU integration tests get run
 - `MAX_SLOTS=3` and `DEFAULT_JOBS=16` (a shared machine)
 - `INTEGTEST_EXCLUSIVE=integtest`: one integtest at a time, but other jobs keep running
   alongside it. In the container (`all`, the default) an integtest takes the whole machine
-- `MIRROR` for repos
+- `MIRROR` for repos, and `PUSH_REMOTE`, the git remote name clients push to it with
+  (default `daqfnal`). Work clones on the host use the same name.
 - `SELF_SSH_HOST=$(hostname)`, since drunc's process manager connects to the host itself
 
 **Code goes through git.**
@@ -205,6 +206,7 @@ log in to. Its settings, `jobd/dunebuild03.conf`, work for anyone as they are.
 - Two jobs at a time, with 12 build threads each.
 - An integtest takes the whole machine. Integration tests that need 30 CPUs belong on
   daq.fnal.gov.
+- Builds need `libunwind-devel`, which dunebuild03 lacked as of 2026-11-10 (see below).
 
 Setup, once, logged in to dunebuild03 (put your user name in the crontab line):
 
@@ -221,6 +223,11 @@ On your own machine:
   repo.
 - Push branches to it.
 - The `dunedaq` plugin registers the service as `daq-jobd-dunebuild03`.
+
+**System packages.** Building needs some `-devel` packages that the DUNE DAQ image has
+and dunebuild03 lacked: `libunwind-devel` (dfmodules fails to link without it), and
+probably `numactl-devel`, `libbsd-devel`, `libmd-devel` and `libusbx-devel`. They need root
+to install.
 
 Each user runs their own instance, with their own queue and slots. So several people at
 once can still overload the machine's 24 CPUs. Sharing one queue would need a service account.
