@@ -1,0 +1,16 @@
+# Native daq-jobd hosts (jobd/README.md, "Native hosts"). bin/daq-jobd top and remote-add
+# read this; keep the dunedaq plugin's daq-jobd-<name> MCP entries in step with it.
+#
+# NAME         short name: `top --hosts NAME`, `remote-add --host NAME`
+# SSH_HOST     where it runs (Kerberos ssh)
+# REMOTE       git remote name on your machine for its mirror
+# CHECKOUT     its clone of this repo
+# CONF         its daq-jobd settings
+# MIRROR       its bare mirror (jobd/update_mirror.sh), the push target
+#
+# Relative paths are from your home directory there. $USER is your user name: the remote
+# shell expands it in commands, and remote-add expands it locally for the git URL.
+
+# NAME        SSH_HOST              REMOTE       CHECKOUT                                               CONF                                                                     MIRROR
+fnal          daq.fnal.gov          daqfnal      daq-jobd/dunedaq-container                             daq-jobd/daq-jobd.conf                                                   dunedaq_repos_mirror
+dunebuild03   dunebuild03.fnal.gov  dunebuild03  /exp/dune/app/users/$USER/daq-jobd/dunedaq-container  /exp/dune/app/users/$USER/daq-jobd/dunedaq-container/jobd/dunebuild03.conf  /exp/dune/app/users/$USER/dunedaq_repos_mirror

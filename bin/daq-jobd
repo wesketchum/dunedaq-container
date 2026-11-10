@@ -10,18 +10,20 @@
 #                                 the host every SECS (default 15); prints
 #                                 "REQUEST-ENDED <status> <id>". For Monitor/background use.
 #   bin/daq-jobd submit|result|list|cancel|snapshot ...   the daq_jobd.py command line, in the container
-#   bin/daq-jobd top [--interval S] [--hosts local,fnal] [--once] [--json]
-#                                 read-only monitor of this container and the native host
-#                                 ($DAQFNAL_HOST, default daq.fnal.gov); see jobd/monitor.py
+#   bin/daq-jobd top [--interval S] [--hosts local,NAME,...] [--once] [--json]
+#                                 read-only monitor of this container and the native hosts
+#                                 in jobd/native_hosts (default all); see jobd/monitor.py
 #
 # Native host (run there, e.g. over ssh): the service runs directly, with its settings
 # from CONF (see jobd/native.conf.example):
 #   bin/daq-jobd --conf CONF mcp|submit|result|list|cancel|wait|snapshot ...
 #
 # Your own machine, for native hosts:
-#   bin/daq-jobd remote-add [--base URL] DIR...   add a `daqfnal` git remote to each repo
-#       in DIR (a repo, or a work area: its sourcecode/* and pythoncode/*), pointing at
-#       URL/<repo>.git. URL defaults to $DAQFNAL_BASE, else daq.fnal.gov:dunedaq_repos_mirror.
+#   bin/daq-jobd remote-add [--host NAME | --base URL] DIR...   add a git remote for a
+#       native host's mirror to each repo in DIR (a repo, or a work area: its sourcecode/*
+#       and pythoncode/*), pointing at <mirror>/<repo>.git. NAME is from jobd/native_hosts
+#       (default fnal, remote `daqfnal`); --base URL overrides its mirror (or $DAQFNAL_BASE
+#       for fnal).
 #
 # Every start copies jobd/daq_jobd.py to work/.daq-jobd/ (the container sees only
 # /work) and reaps locks left by dead host-side bin/daq-job runners, which the
@@ -83,9 +85,27 @@ cmd_wait() {
   done
 }
 
+# native_host NAME: that host's line from jobd/native_hosts (NAME SSH_HOST REMOTE CHECKOUT CONF MIRROR).
+native_host() {
+  awk -v n="$1" '$1 == n { print; found = 1 } END { exit !found }' "$ROOT/jobd/native_hosts" ||
+    die "no host $1 in jobd/native_hosts"
+}
+
 cmd_remote_add() {
-  local base="${DAQFNAL_BASE:-daq.fnal.gov:dunedaq_repos_mirror}" dir repo url have
-  if [ "${1:-}" = --base ]; then base=$2; shift 2; fi
+  local name=fnal base="" dir repo url have line ssh_host remote mirror
+  while :; do
+    case "${1:-}" in
+      --host) name=$2; shift 2 ;;
+      --base) base=$2; shift 2 ;;
+      *) break ;;
+    esac
+  done
+  line=$(native_host "$name")
+  set -- $line "$@"  # NAME SSH_HOST REMOTE CHECKOUT CONF MIRROR DIR...
+  ssh_host=$2 remote=$3 mirror=${6//\$USER/$USER}
+  shift 6
+  [ "$name" = fnal ] && [ -z "$base" ] && base=${DAQFNAL_BASE:-}
+  base=${base:-$ssh_host:$mirror}
   [ $# -gt 0 ] || die "remote-add: give a repo or work area directory"
   for dir in "$@"; do
     if [ -d "$dir/.git" ]; then set -- "$dir"
@@ -94,10 +114,10 @@ cmd_remote_add() {
       repo=${repo%/}
       [ -d "$repo/.git" ] || continue
       url="$base/$(basename "$repo").git"
-      if have=$(git -C "$repo" remote get-url daqfnal 2>/dev/null); then
-        [ "$have" = "$url" ] && echo "ok       $repo" || echo "SKIP     $repo: daqfnal is already $have" >&2
+      if have=$(git -C "$repo" remote get-url "$remote" 2>/dev/null); then
+        [ "$have" = "$url" ] && echo "ok       $repo" || echo "SKIP     $repo: $remote is already $have" >&2
       else
-        git -C "$repo" remote add daqfnal "$url" && echo "added    $repo -> $url"
+        git -C "$repo" remote add "$remote" "$url" && echo "added    $repo -> $remote $url"
       fi
     done
   done
@@ -109,7 +129,7 @@ if [ "${1:-}" = --conf ]; then
   export DAQ_JOBD_CONF="$(cd "$(dirname "$conf")" && pwd)/$(basename "$conf")"
   case "${1:-}" in
     mcp|submit|result|list|cancel|wait|snapshot) exec python3 -I "$ROOT/jobd/daq_jobd.py" "$@" ;;
-    *) sed -n '2,31p' "$0"; exit 2 ;;
+    *) sed -n '2,33p' "$0"; exit 2 ;;
   esac
 fi
 
@@ -128,5 +148,5 @@ case "$sub" in
     if [ "$sub" = mcp ]; then in_container "$hw" -i -- mcp
     else in_container "$hw" -- "$sub" "$@"; fi
     ;;
-  *) sed -n '2,31p' "$0"; exit 2 ;;
+  *) sed -n '2,33p' "$0"; exit 2 ;;
 esac

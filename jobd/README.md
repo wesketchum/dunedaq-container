@@ -107,8 +107,9 @@ For each instance it shows:
 It only reads. Cancelling stays with `daq_cancel` or `bin/daq-jobd cancel`.
 
 Under it, `daq_jobd.py snapshot` returns all of that as one JSON document. `top` runs it with
-`bin/daq-jobd snapshot` locally and over ssh on `$DAQFNAL_HOST` (default daq.fnal.gov), so
-the native host needs a Kerberos ticket and a checkout that has the command. The ssh
+`bin/daq-jobd snapshot` locally and over ssh on each host in `jobd/native_hosts`
+(`--hosts local,fnal,dunebuild03` picks some). Native hosts need a Kerberos ticket and a
+checkout that has the command. The ssh
 connection is reused between polls (`~/.ssh/cm-daqjobd-*`). The CVMFS and sshd checks are
 cached for a minute in `jobs/.monitor-health.json`, so polling stays cheap.
 `top --json` prints the raw snapshots.
@@ -178,7 +179,7 @@ daq.fnal.gov (Alma 9, 128 CPUs) that is how the 30-CPU integration tests get run
 
 The cycle:
 1. On your own machine, run `bin/daq-jobd remote-add <work area or repo dir>` once. It adds a
-   `daqfnal` remote to each repo there.
+   `daqfnal` remote to each repo there (`--host dunebuild03` for that host's mirror).
 2. Commit, then `git push daqfnal <branch>`.
 3. Ask daq-jobd-fnal for `clone` or `checkout` of `<repo>@<branch>` (or a commit).
 
@@ -195,5 +196,37 @@ pushed, then a GitHub branch, a tag, a commit. The result says which, with the S
 The clone has `receive.denyCurrentBranch=updateInstead`, so during development you can also
 push to it directly (`git push <remote> <branch>:main`).
 
-Further hosts follow the same pattern: copy the config, change `HOST_LABEL` and the mirror
-path, and add another MCP entry.
+### dunebuild03.fnal.gov (open to more people)
+
+dunebuild03 (Alma 9, 24 CPUs, 92 GB) is a general DUNE build machine that more people can
+log in to. Its settings, `jobd/dunebuild03.conf`, work for anyone as they are.
+- Everything goes under `/exp/dune/app/users/$USER`, on CephFS. Home there is a nearly
+  full NFS volume.
+- Two jobs at a time, with 12 build threads each.
+- An integtest takes the whole machine. Integration tests that need 30 CPUs belong on
+  daq.fnal.gov.
+
+Setup, once, logged in to dunebuild03 (put your user name in the crontab line):
+
+```bash
+ssh dunebuild03.fnal.gov true      # accept its own host key: integtests ssh to the host itself
+mkdir -p /exp/dune/app/users/$USER/daq-jobd
+git clone https://github.com/wesketchum/dunedaq-container.git /exp/dune/app/users/$USER/daq-jobd/dunedaq-container
+/exp/dune/app/users/$USER/daq-jobd/dunedaq-container/jobd/update_mirror.sh /exp/dune/app/users/$USER/dunedaq_repos_mirror
+crontab -e   # 17 * * * * /exp/dune/app/users/<you>/daq-jobd/dunedaq-container/jobd/update_mirror.sh /exp/dune/app/users/<you>/dunedaq_repos_mirror
+```
+
+On your own machine:
+- `bin/daq-jobd remote-add --host dunebuild03 <area>` adds a `dunebuild03` remote to each
+  repo.
+- Push branches to it.
+- The `dunedaq` plugin registers the service as `daq-jobd-dunebuild03`.
+
+Each user runs their own instance, with their own queue and slots. So several people at
+once can still overload the machine's 24 CPUs. Sharing one queue would need a service account.
+
+### Adding a host
+
+1. Add a line to `jobd/native_hosts`. `top` and `remote-add` read it.
+2. Write a settings file. Use `$USER` paths if others will use it.
+3. Add a `daq-jobd-<name>` MCP entry to the `dunedaq` plugin.

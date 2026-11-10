@@ -126,6 +126,9 @@ The same service runs natively on daq.fnal.gov (Alma 9, 128 CPUs), registered as
 - The host keeps an hourly mirror of the DUNE-DAQ repos.
 - Connecting needs a valid Kerberos ticket.
 
+dunebuild03.fnal.gov works the same way (`daq-jobd-dunebuild03`, 24 CPUs). More people can
+log in there, and its settings work for any user as they are.
+
 Layout and setup are in [`jobd/README.md`](jobd/README.md#native-hosts-daqfnalgov).
 
 | Piece | Purpose |
@@ -133,7 +136,7 @@ Layout and setup are in [`jobd/README.md`](jobd/README.md#native-hosts-daqfnalgo
 | `AGENTS.md` | Instructions for AI agents working in this repo (`CLAUDE.md` just imports it) |
 | `jobd/daq_jobd.py` | The daq-jobd service (MCP server and request runner) |
 | `bin/daq-jobd` | Starts it: `mcp` (container), `--conf <file> mcp` (native host), `wait <id>`, `remote-add`; `top` monitors both instances (`jobd/monitor.py`) |
-| `jobd/update_mirror.sh`, `jobd/native.conf.example` | Native host: hourly repo mirror and host settings |
+| `jobd/update_mirror.sh`, `jobd/native.conf.example`, `jobd/dunebuild03.conf`, `jobd/native_hosts` | Native hosts: hourly repo mirror, host settings, and the list of hosts |
 | `bin/daq-exec` | Run a command in the container with the DAQ env set up correctly (handles the Rosetta `SPACK_ROOT` trap) |
 | `bin/daq-job` | Job queue and locks shared with daq-jobd: one per work area, ≤2 total, integtests exclusive; state and logs in `work/.daq-jobs/` |
 | `bin/daq-stack` | `status` / `ensure` / `restart-if-idle` (refuses if jobs or interactive shells are active) |

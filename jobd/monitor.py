@@ -5,11 +5,11 @@ Polls `daq-jobd snapshot` on each host (the local container through bin/daq-jobd
 the native host over ssh) and redraws one screen with active and queued requests,
 the running step's log tail, slots and locks, health, and recent history.
 
-  monitor.py [--interval S] [--hosts local,fnal] [--lines N] [--hours H] [--once] [--json]
+  monitor.py [--interval S] [--hosts local,NAME,...] [--lines N] [--hours H] [--once] [--json]
 
 --once prints one frame and exits; --json prints the raw snapshots instead (the data
-a web page would use). The native host is $DAQFNAL_HOST (default daq.fnal.gov); ssh
-needs a Kerberos ticket and reuses one connection between polls. Runs on the Mac with
+a web page would use). Native hosts come from jobd/native_hosts (default: all of them);
+ssh needs a Kerberos ticket and reuses one connection between polls. Runs on the Mac with
 any Python 3.9+, standard library only.
 """
 
@@ -23,7 +23,6 @@ import threading
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FNAL = os.environ.get("DAQFNAL_HOST", "daq.fnal.gov")
 SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ControlMaster=auto",
        "-o", "ControlPath=~/.ssh/cm-daqjobd-%C", "-o", "ControlPersist=120"]
 
@@ -33,16 +32,30 @@ COLOR = {"ok": "\033[32m", "running": "\033[36m", "queued": "\033[33m", "failed"
 MARK = {"ok": "✓", "failed": "✗", "cancelled": "-", "skipped": "·", "lost": "?"}
 
 
+def native_hosts():
+    """NAME -> (SSH_HOST, CHECKOUT, CONF) from jobd/native_hosts."""
+    out = {}
+    with open(os.path.join(ROOT, "jobd", "native_hosts")) as f:
+        for line in f:
+            fields = line.split()
+            if len(fields) == 6 and not fields[0].startswith("#"):
+                out[fields[0]] = (fields[1], fields[3], fields[4])
+    return out
+
+
+HOSTS = native_hosts()
+
+
 def command(host, hours, lines):
     args = ["snapshot", str(hours), str(lines)]
     if host == "local":
         return [os.path.join(ROOT, "bin", "daq-jobd")] + args
-    return SSH + [FNAL, " ".join(["daq-jobd/dunedaq-container/bin/daq-jobd",
-                                  "--conf", "daq-jobd/daq-jobd.conf"] + args)]
+    ssh_host, checkout, conf = HOSTS[host]
+    return SSH + [ssh_host, " ".join([checkout + "/bin/daq-jobd", "--conf", conf] + args)]
 
 
 def label(host):
-    return FNAL if host == "fnal" else "container"
+    return HOSTS[host][0] if host in HOSTS else "container"
 
 
 def fetch(host, hours, lines):
@@ -188,15 +201,16 @@ def frame(snaps, hours, color, width):
 def main():
     ap = argparse.ArgumentParser(description="Read-only monitor for daq-jobd instances.")
     ap.add_argument("--interval", type=float, default=5, help="seconds between polls (default 5)")
-    ap.add_argument("--hosts", default="local,fnal", help="comma list of local, fnal (default both)")
+    ap.add_argument("--hosts", default=",".join(["local"] + list(HOSTS)),
+                    help="comma list of local and jobd/native_hosts names (default all)")
     ap.add_argument("--lines", type=int, default=4, help="log tail lines per running step (default 4)")
     ap.add_argument("--hours", type=float, default=24, help="history window (default 24)")
     ap.add_argument("--once", action="store_true", help="print one frame and exit")
     ap.add_argument("--json", action="store_true", help="print the raw snapshots and exit")
     opt = ap.parse_args()
     hosts = [h.strip() for h in opt.hosts.split(",") if h.strip()]
-    if not hosts or any(h not in ("local", "fnal") for h in hosts):
-        ap.error("--hosts takes local and/or fnal")
+    if not hosts or any(h != "local" and h not in HOSTS for h in hosts):
+        ap.error("--hosts takes local and names from jobd/native_hosts: %s" % ", ".join(HOSTS))
 
     if opt.json or opt.once:
         snaps = fetch_all(hosts, opt.hours, opt.lines)
