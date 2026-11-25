@@ -35,18 +35,13 @@ This creates a **rootful** Podman VM and installs a systemd service that configu
 This creates:
 - `.env` — your host UID/GID, read by `podman-compose` so the container runs as you
 - `work/container_passwd` — a minimal passwd file so the container knows your username
-- `work/.bash_profile` — copied from `templates/bash_profile` (only if it doesn't already
-  exist — re-running `setup.sh` never overwrites your copy). Sets up the Rosetta/spack
-  workaround (see [Apple Silicon](#apple-silicon-m1m2m3m4m5)) and a `git_clone_dunedaq` helper.
-- `work/.ssh/` loopback-sshd files for integration tests (see
-  [Integration tests and sshd](#integration-tests-and-sshd)). Existing files are never overwritten.
+- `work/.bash_profile` — copied from `templates/bash_profile` (only if it doesn't already exist — re-running `setup.sh` never overwrites your copy). Sets up the Rosetta/spack workaround (see [Apple Silicon](#apple-silicon-m1m2m3m4m5)) and a `git_clone_dunedaq` helper.
+- `work/.ssh/` loopback-sshd files for integration tests (see [Integration tests and sshd](#integration-tests-and-sshd)). Existing files are never overwritten.
 - `work/` — your persistent work directory (code, history, dotfiles)
 
-Not created by this script, but needed for a fully working environment — set these up
-yourself in `work/` if you need them:
+Not created by this script, but needed for a fully working environment — set these up yourself in `work/` if you need them:
 - `work/.gitconfig` — git identity (`user.name`/`user.email`) for commits made inside the container
-- `work/.ssh` — an SSH keypair with GitHub access, if you'll be cloning/pushing over SSH
-  (e.g. via the `git_clone_dunedaq` helper)
+- `work/.ssh` — an SSH keypair with GitHub access, if you'll be cloning/pushing over SSH (e.g. via the `git_clone_dunedaq` helper)
 
 ### 3. Start the stack
 
@@ -91,16 +86,10 @@ Then `./shell.sh` as usual. The containers have `restart: unless-stopped`, so if
 
 ## Agent-driven workflow (Claude Code, Codex)
 
-Agents build and test through **daq-jobd**, a job service that runs inside the container
-and offers MCP tools: `daq_submit`, `daq_result`, `daq_log`, `daq_list`, `daq_cancel`,
-`daq_areas`, `daq_releases` and `daq_status`. A request is a list of steps (create a work
-area, clone, build, unit tests, lint, integration tests, ...). It runs in the background,
-under shared limits: one job per area, two in total, integtests alone. Design, tools and
-limits are in [`jobd/README.md`](jobd/README.md).
+Agents build and test through **daq-jobd**, a job service that runs inside the container and offers MCP tools: `daq_submit`, `daq_result`, `daq_log`, `daq_list`, `daq_cancel`, `daq_areas`, `daq_releases` and `daq_status`. A request is a list of steps (create a work area, clone, build, unit tests, lint, integration tests, ...). It runs in the background, under shared limits: one job per area, two in total, integtests alone. Design, tools and limits are in [`jobd/README.md`](jobd/README.md).
 
 The `dunedaq` plugin registers the server and the client skill:
-- **Claude Code:** install the [dunedaq-ai-tools](https://github.com/wesketchum/dunedaq-ai-tools)
-  plugin.
+- **Claude Code:** install the [dunedaq-ai-tools](https://github.com/wesketchum/dunedaq-ai-tools) plugin.
   ```
   /plugin marketplace add wesketchum/dunedaq-ai-tools
   /plugin install dunedaq@dunedaq-ai-tools
@@ -108,26 +97,16 @@ The `dunedaq` plugin registers the server and the client skill:
   `/mcp` should then list `plugin:dunedaq:daq-jobd`.
 - **Codex:** ai_tools' `scripts/install-codex.sh --apply` registers the same server.
 
-From any session (e.g. one working in `~/dunedaq/all_repos`), ask it to build or test
-something, or use `/dunedaq:dunedaq-env-client`. Agents edit code directly in
-`work/<area>/sourcecode/` on the host. With no broker in between, they also keep the
-stack healthy themselves (`bin/daq-stack ensure`, `restart-if-idle`), as the skill
-describes. To watch what they are running, here and on daq.fnal.gov, use `bin/daq-jobd top`.
-Nothing is pushed from the container: pushes to GitHub are blocked there, and
-publishing is left to you.
+From any session (e.g. one working in `~/dunedaq/all_repos`), ask it to build or test something, or use `/dunedaq:dunedaq-env-client`. Agents edit code directly in `work/<area>/sourcecode/` on the host. With no broker in between, they also keep the stack healthy themselves (`bin/daq-stack ensure`, `restart-if-idle`), as the skill describes. To watch what they are running, here and on daq.fnal.gov, use `bin/daq-jobd top`. Nothing is pushed from the container: pushes to GitHub are blocked there, and publishing is left to you.
 
 ### On daq.fnal.gov (big integration tests)
 
-The same service runs natively on daq.fnal.gov (Alma 9, 128 CPUs), registered as
-`daq-jobd-fnal`. It's the place for integration tests that need 30 CPUs.
-- Code travels by git. `bin/daq-jobd remote-add <area>` adds a `daqfnal` remote to each repo
-  in a work area. Push a branch to it, then request `clone` or `checkout` of that branch or
-  commit.
+The same service runs natively on daq.fnal.gov (Alma 9, 128 CPUs), registered as `daq-jobd-fnal`. It's the place for integration tests that need 30 CPUs.
+- Code travels by git. `bin/daq-jobd remote-add <area>` adds a `daqfnal` remote to each repo in a work area. Push a branch to it, then request `clone` or `checkout` of that branch or commit.
 - The host keeps an hourly mirror of the DUNE-DAQ repos.
 - Connecting needs a valid Kerberos ticket.
 
-dunebuild03.fnal.gov works the same way (`daq-jobd-dunebuild03`, 24 CPUs). More people can
-log in there, and its settings work for any user as they are.
+dunebuild03.fnal.gov works the same way (`daq-jobd-dunebuild03`, 24 CPUs). More people can log in there, and its settings work for any user as they are.
 
 Layout and setup are in [`jobd/README.md`](jobd/README.md#native-hosts-daqfnalgov).
 
@@ -145,29 +124,14 @@ Layout and setup are in [`jobd/README.md`](jobd/README.md#native-hosts-daqfnalgo
 
 ## Integration tests and sshd
 
-drunc's default process manager (`ssh-standalone`) starts every DAQ app with
-`ssh <user>@<hostname>`, even when the whole system runs on one machine. Without an sshd,
-integtests fail with `ssh: connect to host ... port 22: Connection refused`.
+drunc's default process manager (`ssh-standalone`) starts every DAQ app with `ssh <user>@<hostname>`, even when the whole system runs on one machine. Without an sshd, integtests fail with `ssh: connect to host ... port 22: Connection refused`.
 
-The official image already ships `openssh-server`, so this is all set up at run time and
-needs no custom image:
-- `compose.yaml` gives the container a stable hostname (`dunedaq-app`), and its entrypoint
-  starts a **non-root sshd on port 2222** before the login shell.
-- `setup.sh` writes the sshd config, host key, a separate loopback keypair
-  (`id_ed25519_loopback`, added to `authorized_keys`) and a `Host localhost 127.0.0.1
-  dunedaq-app` block in `work/.ssh/config` that points those names at port 2222. Other
-  hosts (e.g. GitHub) are unaffected.
-- `bin/daq-stack status` checks it end to end (an `ssh dunedaq-app true` inside the
-  container), and `bin/daq-stack ensure` restarts sshd if it has died. Log:
-  `work/.ssh/sshd/sshd.log`. Its warning that "'UsePAM no' is not supported in RHEL"
-  is expected: a non-root sshd can't use PAM.
+The official image already ships `openssh-server`, so this is all set up at run time and needs no custom image:
+- `compose.yaml` gives the container a stable hostname (`dunedaq-app`), and its entrypoint starts a **non-root sshd on port 2222** before the login shell.
+- `setup.sh` writes the sshd config, host key, a separate loopback keypair (`id_ed25519_loopback`, added to `authorized_keys`) and a `Host localhost 127.0.0.1 dunedaq-app` block in `work/.ssh/config` that points those names at port 2222. Other hosts (e.g. GitHub) are unaffected.
+- `bin/daq-stack status` checks it end to end (an `ssh dunedaq-app true` inside the container), and `bin/daq-stack ensure` restarts sshd if it has died. Log: `work/.ssh/sshd/sshd.log`. Its warning that "'UsePAM no' is not supported in RHEL" is expected: a non-root sshd can't use PAM.
 
-The bundle script's `ps` (numad check) and `jq` (copying failed-test dirs) aren't in the
-image. Both are optional and only produce warnings without them. The container doesn't
-install them at startup. To add them:
-`podman exec -u root dunedaq-app dnf install -y -q --disablerepo=epel procps-ng jq`. They
-last until the container is recreated. daq-jobd's integtest step warns when they're
-missing.
+The bundle script's `ps` (numad check) and `jq` (copying failed-test dirs) aren't in the image. Both are optional and only produce warnings without them. The container doesn't install them at startup. To add them: `podman exec -u root dunedaq-app dnf install -y -q --disablerepo=epel procps-ng jq`. They last until the container is recreated. daq-jobd's integtest step warns when they're missing.
 
 ## Customizing the Podman machine
 
@@ -214,10 +178,7 @@ The sidecar mounts the repositories listed in `CVMFS_REPOSITORIES` in `compose.y
 - If the service is missing the `mkdir` lines, SSH into the VM and update `/etc/systemd/system/cvmfs-mountpoint.service` to include an `ExecStart=/bin/mkdir -p /run/cvmfs/<repo>` line for each repository, then `sudo systemctl daemon-reload`.
 
 **CVMFS reads fail with "Input/output error" during a build**
-- Usually a stuck or corrupted cached chunk. Run `./restart.sh` — it recreates the stack
-  (wiping the sidecar's writable layer / CVMFS cache), and unlike a plain `podman restart`
-  or `podman-compose down && up`, it also waits for a real CVMFS read to succeed before
-  returning (the compose healthcheck's `test -d` alone is a false positive).
+- Usually a stuck or corrupted cached chunk. Run `./restart.sh` — it recreates the stack (wiping the sidecar's writable layer / CVMFS cache), and unlike a plain `podman restart` or `podman-compose down && up`, it also waits for a real CVMFS read to succeed before returning (the compose healthcheck's `test -d` alone is a false positive).
 
 **CVMFS sidecar requires rootful Podman**
 - Check: `podman machine ssh dunedaq -- podman info 2>/dev/null | grep -i rootless`
@@ -233,8 +194,7 @@ The sidecar mounts the repositories listed in `CVMFS_REPOSITORIES` in `compose.y
 
 **Integtests fail with `ssh: connect to host ... Connection refused`**
 - Run `bin/daq-stack status`. If `sshd` is not reachable, run `bin/daq-stack ensure`.
-- If `work/.ssh/sshd/sshd_config` is missing, run `./setup.sh`. A container created before
-  the sshd change needs `bin/daq-stack restart-if-idle` so it picks up the hostname and entrypoint.
+- If `work/.ssh/sshd/sshd_config` is missing, run `./setup.sh`. A container created before the sshd change needs `bin/daq-stack restart-if-idle` so it picks up the hostname and entrypoint.
 
 **Permission errors on `./work`**
 - The `:Z` mount option applies SELinux relabeling, required for rootful Podman. Do not remove it.

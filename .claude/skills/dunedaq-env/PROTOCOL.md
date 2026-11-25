@@ -1,16 +1,8 @@
 # dunedaq-env message protocol (v1)
 
-Peer Claude sessions talk to the **dunedaq-env broker** session with `SendMessage`.
-The broker's current session name is written to
-`/Users/wketchum/dunedaq-container/work/.daq-jobs/broker` when it starts, and
-rewritten whenever the broker notices its name has changed (e.g. after a resume). Read
-that file to get the `to:` address. If the file is missing, its name is not in
-`ListAgents`, or a send fails, fall back to `ListAgents`. If more than one session
-could be the broker, ask your user rather than guessing.
+Peer Claude sessions talk to the **dunedaq-env broker** session with `SendMessage`. The broker's current session name is written to `/Users/wketchum/dunedaq-container/work/.daq-jobs/broker` when it starts, and rewritten whenever the broker notices its name has changed (e.g. after a resume). Read that file to get the `to:` address. If the file is missing, its name is not in `ListAgents`, or a send fails, fall back to `ListAgents`. If more than one session could be the broker, ask your user rather than guessing.
 
-Every message is plain text whose first line is a header (`DAQ-REQUEST v1`,
-`DAQ-ACK v1`, `DAQ-RESULT v1`), followed by YAML. Keep messages short. Logs are
-never pasted; they are referenced by absolute host path.
+Every message is plain text whose first line is a header (`DAQ-REQUEST v1`, `DAQ-ACK v1`, `DAQ-RESULT v1`), followed by YAML. Keep messages short. Logs are never pasted; they are referenced by absolute host path.
 
 ## Request (peer → broker)
 
@@ -94,16 +86,8 @@ warnings: ["daqdataformats changed public headers; 4 release packages in this ar
 
 ## Rules both sides rely on
 
-- **Edits happen on the host.** Peers edit `host_path/sourcecode/<repo>/...` directly
-  (it is the same directory as `/work/<area>/...` in the container). The broker never
-  edits source unless a `format` step is requested.
-- **Nothing is ever pushed.** Pushes are blocked inside the container. The broker
-  reports branch + host path; publishing is the user's call, made from the host
-  (see the `dunedaq:dune-github-publisher` agent from the `dunedaq` plugin).
-- **One job per area, two jobs total, integtests alone.** Requests queue
-  instead of failing.
-- The broker will **refuse**: deleting or overwriting a work area (the user must confirm
-  that in the broker session), paths outside `work/`, `git push` / `gh`, rebases, and
-  force operations.
-- Results arrive asynchronously. A build can take many minutes, so do not poll; the
-  broker messages you.
+- **Edits happen on the host.** Peers edit `host_path/sourcecode/<repo>/...` directly (it is the same directory as `/work/<area>/...` in the container). The broker never edits source unless a `format` step is requested.
+- **Nothing is ever pushed.** Pushes are blocked inside the container. The broker reports branch + host path; publishing is the user's call, made from the host (see the `dunedaq:dune-github-publisher` agent from the `dunedaq` plugin).
+- **One job per area, two jobs total, integtests alone.** Requests queue instead of failing.
+- The broker will **refuse**: deleting or overwriting a work area (the user must confirm that in the broker session), paths outside `work/`, `git push` / `gh`, rebases, and force operations.
+- Results arrive asynchronously. A build can take many minutes, so do not poll; the broker messages you.
