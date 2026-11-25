@@ -9,10 +9,6 @@
       "Bash(git -C /Users/wketchum/dunedaq/all_repos/* log *)",
       "Bash(git -C /Users/wketchum/dunedaq/all_repos/* show *)",
       "Bash(git -C /Users/wketchum/dunedaq/all_repos/* ls-remote *)",
-      "Bash(git push daqfnal *)",
-      "Bash(git push -q daqfnal *)",
-      "Bash(git -C * push daqfnal *)",
-      "Bash(git -C * push -q daqfnal *)",
       "Bash(resolve-build-packages *)",
       "Read(/Users/wketchum/dunedaq/all_repos/**)",
       "Write(/Users/wketchum/dunedaq-container/work/.daq-jobs/broker)"
@@ -24,10 +20,22 @@
       "Bash(git push * origin*)",
       "Bash(git -C * push)",
       "Bash(git -C * push*origin*)",
-      "Bash(gh *)",
       "Bash(*restart.sh*)",
       "Bash(podman-compose down*)",
-      "Bash(rm -rf *)"
+      "Bash(rm -rf *)",
+      "Bash(gh pr create *)",
+      "Bash(gh pr merge *)",
+      "Bash(gh pr comment *)",
+      "Bash(gh pr review *)",
+      "Bash(gh pr close *)",
+      "Bash(gh pr edit *)",
+      "Bash(gh issue create *)",
+      "Bash(gh issue comment *)",
+      "Bash(gh issue close *)",
+      "Bash(gh issue edit *)",
+      "Bash(gh release create *)",
+      "Bash(gh repo create *)",
+      "Bash(gh repo delete *)"
     ]
   }
 }
